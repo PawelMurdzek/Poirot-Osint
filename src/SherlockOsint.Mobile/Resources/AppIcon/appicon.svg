@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Magnifying glass circle -->
+  <circle cx="200" cy="200" r="120" stroke="white" stroke-width="40" fill="none"/>
+  <!-- Magnifying glass handle -->
+  <line x1="290" y1="290" x2="430" y2="430" stroke="white" stroke-width="50" stroke-linecap="round"/>
+  <!-- Eye in center -->
+  <circle cx="200" cy="200" r="50" fill="white"/>
+  <circle cx="200" cy="200" r="25" fill="#6200EE"/>
+</svg>

@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:viewmodels="clr-namespace:SherlockOsint.Mobile.ViewModels"
+             x:Class="SherlockOsint.Mobile.Views.SearchPage"
+             x:DataType="viewmodels:SearchViewModel"
+             Title="Poirot OSINT"
+             BackgroundColor="{StaticResource Background}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="24" Spacing="16">
+            
+            <!-- Header -->
+            <Frame BackgroundColor="{StaticResource Primary}" 
+                   CornerRadius="16" 
+                   Padding="20"
+                   HasShadow="True">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Poirot OSINT"
+                           FontSize="28"
+                           FontAttributes="Bold"
+                           TextColor="White"
+                           HorizontalTextAlignment="Center" />
+                    <Label Text="Open Source Intelligence Search"
+                           FontSize="14"
+                           TextColor="#E0E0E0"
+                           HorizontalTextAlignment="Center" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Connection Status -->
+            <Frame BackgroundColor="{Binding IsConnected, Converter={StaticResource BoolToColorConverter}}"
+                   CornerRadius="8"
+                   Padding="12"
+                   IsVisible="{Binding IsSearching}">
+                <HorizontalStackLayout HorizontalOptions="Center" Spacing="8">
+                    <ActivityIndicator IsRunning="{Binding IsSearching}" 
+                                       Color="White"
+                                       HeightRequest="20"
+                                       WidthRequest="20" />
+                    <Label Text="{Binding StatusMessage}"
+                           TextColor="White"
+                           FontSize="14" />
+                </HorizontalStackLayout>
+            </Frame>
+
+            <!-- Search Form -->
+            <Frame BackgroundColor="{StaticResource Surface}" 
+                   CornerRadius="16" 
+                   Padding="20"
+                   HasShadow="True">
+                <VerticalStackLayout Spacing="16">
+                    
+                    <Label Text="Search Criteria"
+                           FontSize="18"
+                           FontAttributes="Bold"
+                           TextColor="{StaticResource TextPrimary}" />
+
+                    <!-- Full Name -->
+                    <VerticalStackLayout Spacing="4">
+                        <Label Text="Full Name"
+                               FontSize="12"
+                               TextColor="{StaticResource TextSecondary}" />
+                        <Frame BackgroundColor="{StaticResource InputBackground}"
+                               CornerRadius="8"
+                               Padding="0"
+                               HasShadow="False">
+                            <Entry Placeholder="e.g., John Doe"
+                                   Text="{Binding FullName}"
+                                   TextColor="{StaticResource TextPrimary}"
+                                   PlaceholderColor="{StaticResource TextSecondary}"
+                                   Keyboard="Text"
+                                   Margin="12,8" />
+                        </Frame>
+                    </VerticalStackLayout>
+
+                    <!-- Email -->
+                    <VerticalStackLayout Spacing="4">
+                        <Label Text="Email Address"
+                               FontSize="12"
+                               TextColor="{StaticResource TextSecondary}" />
+                        <Frame BackgroundColor="{StaticResource InputBackground}"
+                               CornerRadius="8"
+                               Padding="0"
+                               HasShadow="False">
+                            <Entry Placeholder="e.g., john.doe@example.com"
+                                   Text="{Binding Email}"
+                                   TextColor="{StaticResource TextPrimary}"
+                                   PlaceholderColor="{StaticResource TextSecondary}"
+                                   Keyboard="Email"
+                                   Margin="12,8" />
+                        </Frame>
+                    </VerticalStackLayout>
+
+                    <!-- Phone -->
+                    <VerticalStackLayout Spacing="4">
+                        <Label Text="Phone Number"
+                               FontSize="12"
+                               TextColor="{StaticResource TextSecondary}" />
+                        <Frame BackgroundColor="{StaticResource InputBackground}"
+                               CornerRadius="8"
+                               Padding="0"
+                               HasShadow="False">
+                            <Entry Placeholder="e.g., +1 555-123-4567"
+                                   Text="{Binding Phone}"
+                                   TextColor="{StaticResource TextPrimary}"
+                                   PlaceholderColor="{StaticResource TextSecondary}"
+                                   Keyboard="Telephone"
+                                   Margin="12,8" />
+                        </Frame>
+                    </VerticalStackLayout>
+
+                    <!-- Nickname -->
+                    <VerticalStackLayout Spacing="4">
+                        <Label Text="Nickname / Username"
+                               FontSize="12"
+                               TextColor="{StaticResource TextSecondary}" />
+                        <Frame BackgroundColor="{StaticResource InputBackground}"
+                               CornerRadius="8"
+                               Padding="0"
+                               HasShadow="False">
+                            <Entry Placeholder="e.g., johndoe123"
+                                   Text="{Binding Nickname}"
+                                   TextColor="{StaticResource TextPrimary}"
+                                   PlaceholderColor="{StaticResource TextSecondary}"
+                                   Keyboard="Text"
+                                   Margin="12,8" />
+                        </Frame>
+                    </VerticalStackLayout>
+
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Action Buttons -->
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                <Button Text="Clear"
+                        Command="{Binding ClearFormCommand}"
+                        BackgroundColor="{StaticResource Secondary}"
+                        TextColor="White"
+                        FontAttributes="Bold"
+                        CornerRadius="12"
+                        HeightRequest="50"
+                        Grid.Column="0" />
+                
+                <Button Text="Search"
+                        Command="{Binding SearchCommand}"
+                        BackgroundColor="{StaticResource Primary}"
+                        TextColor="White"
+                        FontAttributes="Bold"
+                        CornerRadius="12"
+                        HeightRequest="50"
+                        Grid.Column="1"
+                        IsEnabled="{Binding CanSearch}" />
+            </Grid>
+
+            <!-- Status Message -->
+            <Label Text="{Binding StatusMessage}"
+                   FontSize="12"
+                   TextColor="{StaticResource TextSecondary}"
+                   HorizontalTextAlignment="Center"
+                   Margin="0,8,0,0" />
+
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

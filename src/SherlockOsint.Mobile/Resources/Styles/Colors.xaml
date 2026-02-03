@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<?xaml-comp compile="true" ?>
+<ResourceDictionary 
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+
+    <!-- Primary Colors - Modern Purple Theme -->
+    <Color x:Key="Primary">#6200EE</Color>
+    <Color x:Key="PrimaryDark">#3700B3</Color>
+    <Color x:Key="PrimaryLight">#BB86FC</Color>
+    
+    <!-- Secondary Colors -->
+    <Color x:Key="Secondary">#03DAC6</Color>
+    <Color x:Key="SecondaryDark">#018786</Color>
+    
+    <!-- Background Colors -->
+    <Color x:Key="Background">#121212</Color>
+    <Color x:Key="Surface">#1E1E1E</Color>
+    <Color x:Key="InputBackground">#2C2C2C</Color>
+    
+    <!-- Text Colors -->
+    <Color x:Key="TextPrimary">#FFFFFF</Color>
+    <Color x:Key="TextSecondary">#B3B3B3</Color>
+    <Color x:Key="TextDisabled">#666666</Color>
+    
+    <!-- Status Colors -->
+    <Color x:Key="Success">#4CAF50</Color>
+    <Color x:Key="Warning">#FF9800</Color>
+    <Color x:Key="Error">#F44336</Color>
+    <Color x:Key="Info">#2196F3</Color>
+
+    <!-- Depth Colors for Tree View -->
+    <Color x:Key="Depth0">#1E1E1E</Color>
+    <Color x:Key="Depth1">#252525</Color>
+    <Color x:Key="Depth2">#2C2C2C</Color>
+    <Color x:Key="Depth3">#333333</Color>
+
+</ResourceDictionary>

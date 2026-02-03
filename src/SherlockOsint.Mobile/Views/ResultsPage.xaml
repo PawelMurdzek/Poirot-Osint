@@ -1,0 +1,373 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:viewmodels="clr-namespace:SherlockOsint.Mobile.ViewModels"
+             xmlns:models="clr-namespace:SherlockOsint.Shared.Models;assembly=SherlockOsint.Shared"
+             x:Class="SherlockOsint.Mobile.Views.ResultsPage"
+             x:DataType="viewmodels:ResultsViewModel"
+             Title="Search Results"
+             BackgroundColor="{StaticResource Background}">
+
+    <Grid RowDefinitions="Auto,*,Auto" Padding="16">
+        
+        <!-- Header with Status -->
+        <Frame BackgroundColor="{StaticResource Surface}"
+               CornerRadius="12"
+               Padding="16"
+               HasShadow="True"
+               Grid.Row="0">
+            <Grid ColumnDefinitions="*,Auto">
+                <VerticalStackLayout Grid.Column="0" Spacing="4">
+                    <Label Text="Target Identification"
+                           FontSize="18"
+                           FontAttributes="Bold"
+                           TextColor="{StaticResource TextPrimary}" />
+                    <Label Text="{Binding StatusMessage}"
+                           FontSize="12"
+                           TextColor="{StaticResource TextSecondary}"
+                           LineBreakMode="TailTruncation" />
+                </VerticalStackLayout>
+                
+                <ActivityIndicator IsRunning="{Binding IsSearching}"
+                                   Color="{StaticResource Primary}"
+                                   HeightRequest="24"
+                                   WidthRequest="24"
+                                   Grid.Column="1"
+                                   VerticalOptions="Center" />
+            </Grid>
+        </Frame>
+
+        <!-- Scrollable Content Area -->
+        <ScrollView Grid.Row="1" Margin="0,12,0,0">
+            <VerticalStackLayout Spacing="12">
+                
+                <!-- Candidates List -->
+                <CollectionView ItemsSource="{Binding Candidates}"
+                                IsVisible="{Binding HasCandidates}">
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate x:DataType="models:TargetCandidate">
+                            <Frame BackgroundColor="{StaticResource Surface}"
+                                   CornerRadius="16"
+                                   Padding="16"
+                                   Margin="0,0,0,8"
+                                   HasShadow="True">
+                                <VerticalStackLayout Spacing="12">
+                                    
+                                    <!-- Candidate Header -->
+                                    <Grid ColumnDefinitions="60,*,Auto">
+                                        <!-- Photo -->
+                                        <Frame CornerRadius="30"
+                                               Padding="0"
+                                               IsClippedToBounds="True"
+                                               HeightRequest="60"
+                                               WidthRequest="60"
+                                               BackgroundColor="{StaticResource Primary}">
+                                            <Image Source="{Binding PhotoUrl}"
+                                                   HeightRequest="60"
+                                                   WidthRequest="60"
+                                                   Aspect="AspectFill" />
+                                        </Frame>
+                                        
+                                        <!-- Name and Location -->
+                                        <VerticalStackLayout Grid.Column="1" 
+                                                             Spacing="2" 
+                                                             VerticalOptions="Center"
+                                                             Margin="12,0,0,0">
+                                            <Label Text="{Binding Name}"
+                                                   FontSize="16"
+                                                   FontAttributes="Bold"
+                                                   TextColor="{StaticResource TextPrimary}" />
+                                            <Label Text="{Binding ProbableLocation}"
+                                                   FontSize="13"
+                                                   TextColor="{StaticResource TextSecondary}" />
+                                        </VerticalStackLayout>
+                                        
+                                        <!-- Probability Badge with Confidence Interval -->
+                                        <VerticalStackLayout Grid.Column="2"
+                                                             VerticalOptions="Center"
+                                                             HorizontalOptions="End"
+                                                             Spacing="2">
+                                            <Frame BackgroundColor="{StaticResource Primary}"
+                                                   CornerRadius="12"
+                                                   Padding="12,6">
+                                                <Label Text="{Binding ProbabilityScore, StringFormat='{0}%'}"
+                                                       FontSize="14"
+                                                       TextColor="White"
+                                                       FontAttributes="Bold"
+                                                       HorizontalTextAlignment="Center" />
+                                            </Frame>
+                                            <!-- Confidence Range -->
+                                            <Label FontSize="10"
+                                                   TextColor="{StaticResource TextSecondary}"
+                                                   HorizontalTextAlignment="Center">
+                                                <Label.Text>
+                                                    <MultiBinding StringFormat="[{0}-{1}%]">
+                                                        <Binding Path="ConfidenceLow" />
+                                                        <Binding Path="ConfidenceHigh" />
+                                                    </MultiBinding>
+                                                </Label.Text>
+                                            </Label>
+                                        </VerticalStackLayout>
+                                    </Grid>
+                                    
+                                    <!-- Divider -->
+                                    <BoxView HeightRequest="1" 
+                                             Color="{StaticResource TextSecondary}" 
+                                             Opacity="0.2" />
+                                    
+                                    <!-- Sources Section -->
+                                    <VerticalStackLayout Spacing="6">
+                                        <Label Text="Sources Evidence"
+                                               FontSize="12"
+                                               FontAttributes="Bold"
+                                               TextColor="{StaticResource Primary}" />
+                                        
+                                        <VerticalStackLayout BindableLayout.ItemsSource="{Binding Sources}"
+                                                             Margin="0,4,0,0">
+                                            <BindableLayout.ItemTemplate>
+                                                <DataTemplate x:DataType="models:SourceEvidence">
+                                                    <ContentView Padding="0" Margin="0,2">
+                                                        <ContentView.GestureRecognizers>
+                                                            <TapGestureRecognizer Command="{Binding Source={RelativeSource AncestorType={x:Type viewmodels:ResultsViewModel}}, Path=OpenSourceUrlCommand}"
+                                                                                  CommandParameter="{Binding .}" />
+                                                        </ContentView.GestureRecognizers>
+                                                        <Frame BackgroundColor="{StaticResource Background}"
+                                                               BorderColor="{StaticResource Primary}"
+                                                               CornerRadius="8"
+                                                               Padding="10,8"
+                                                               HasShadow="False"
+                                                               InputTransparent="True">
+                                                            <Grid ColumnDefinitions="Auto,*,Auto" InputTransparent="True">
+                                                                <Label Text="{Binding Icon}"
+                                                                       FontSize="16"
+                                                                       VerticalOptions="Center"
+                                                                       TextColor="{StaticResource TextPrimary}"
+                                                                       InputTransparent="True" />
+                                                                <VerticalStackLayout Grid.Column="1" Margin="10,0,0,0" InputTransparent="True">
+                                                                    <Label FontSize="13"
+                                                                           TextColor="{StaticResource Primary}"
+                                                                           TextDecorations="Underline"
+                                                                           InputTransparent="True">
+                                                                        <Label.FormattedText>
+                                                                            <FormattedString>
+                                                                                <Span Text="{Binding Platform}" FontAttributes="Bold" />
+                                                                                <Span Text=": " />
+                                                                                <Span Text="{Binding Username}" />
+                                                                            </FormattedString>
+                                                                        </Label.FormattedText>
+                                                                    </Label>
+                                                                    <Label Text="{Binding Explanation}"
+                                                                           FontSize="11"
+                                                                           TextColor="{StaticResource TextSecondary}"
+                                                                           InputTransparent="True" />
+                                                                </VerticalStackLayout>
+                                                                <Label Grid.Column="2"
+                                                                       Text="{Binding ContributionScore, StringFormat='+{0}%'}"
+                                                                       FontSize="12"
+                                                                       TextColor="{StaticResource Success}"
+                                                                       FontAttributes="Bold"
+                                                                       VerticalOptions="Center"
+                                                                       InputTransparent="True" />
+                                                            </Grid>
+                                                        </Frame>
+                                                    </ContentView>
+                                                </DataTemplate>
+                                            </BindableLayout.ItemTemplate>
+                                        </VerticalStackLayout>
+                                    </VerticalStackLayout>
+                                    
+                                    <!-- Inferred Attributes -->
+                                    <VerticalStackLayout Spacing="4" 
+                                                         IsVisible="{Binding InferredAttributes.Count, Converter={StaticResource IntToBoolConverter}}">
+                                        <Label Text="Key Attributes"
+                                               FontSize="12"
+                                               FontAttributes="Bold"
+                                               TextColor="{StaticResource Primary}" />
+                                        <FlexLayout Wrap="Wrap" Direction="Row">
+                                            <BindableLayout.ItemsSource>
+                                                <Binding Path="InferredAttributes" />
+                                            </BindableLayout.ItemsSource>
+                                            <BindableLayout.ItemTemplate>
+                                                <DataTemplate x:DataType="x:String">
+                                                    <Frame BackgroundColor="{StaticResource Secondary}"
+                                                           CornerRadius="8"
+                                                           Padding="8,4"
+                                                           Margin="0,0,6,6">
+                                                        <Label Text="{Binding}"
+                                                               FontSize="10"
+                                                               TextColor="White" />
+                                                    </Frame>
+                                                </DataTemplate>
+                                            </BindableLayout.ItemTemplate>
+                                        </FlexLayout>
+                                    </VerticalStackLayout>
+                                    
+                                    <!-- Country Distribution -->
+                                    <VerticalStackLayout Spacing="6" 
+                                                         IsVisible="{Binding CountryDistribution.Count, Converter={StaticResource IntToBoolConverter}}">
+                                        <Label Text="Country Distribution"
+                                               FontSize="12"
+                                               FontAttributes="Bold"
+                                               TextColor="{StaticResource Primary}" />
+                                        
+                                        <CollectionView ItemsSource="{Binding CountryDistribution}"
+                                                        HeightRequest="100">
+                                            <CollectionView.ItemTemplate>
+                                                <DataTemplate x:DataType="models:CountryProbability">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto" 
+                                                          Padding="0,4"
+                                                          RowDefinitions="Auto,Auto">
+                                                        <!-- Flag -->
+                                                        <Label Text="{Binding Flag}"
+                                                               FontSize="18"
+                                                               VerticalOptions="Center" />
+                                                        
+                                                        <!-- Country and Bar -->
+                                                        <VerticalStackLayout Grid.Column="1" Margin="8,0,8,0">
+                                                            <Label Text="{Binding Country}"
+                                                                   FontSize="12"
+                                                                   FontAttributes="Bold"
+                                                                   TextColor="{StaticResource TextPrimary}" />
+                                                            <!-- Progress Bar -->
+                                                            <ProgressBar Progress="{Binding Probability, Converter={StaticResource PercentageToProgressConverter}}"
+                                                                         ProgressColor="{StaticResource Primary}"
+                                                                         HeightRequest="6" />
+                                                            <Label Text="{Binding Evidence}"
+                                                                   FontSize="9"
+                                                                   TextColor="{StaticResource TextSecondary}"
+                                                                   LineBreakMode="TailTruncation"
+                                                                   MaxLines="1" />
+                                                        </VerticalStackLayout>
+                                                        
+                                                        <!-- Percentage -->
+                                                        <Label Grid.Column="2"
+                                                               Text="{Binding Probability, StringFormat='{0}%'}"
+                                                               FontSize="13"
+                                                               FontAttributes="Bold"
+                                                               TextColor="{StaticResource Primary}"
+                                                               VerticalOptions="Center" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </CollectionView.ItemTemplate>
+                                        </CollectionView>
+                                    </VerticalStackLayout>
+
+                                    <!-- Identity Signals Section -->
+                                    <VerticalStackLayout Spacing="4" 
+                                                         IsVisible="{Binding IdentitySignals.Count, Converter={StaticResource IntToBoolConverter}}">
+                                        <Label Text="Identity Signals"
+                                               FontSize="12"
+                                               FontAttributes="Bold"
+                                               TextColor="{StaticResource Primary}" />
+                                        <CollectionView ItemsSource="{Binding IdentitySignals}"
+                                                        HeightRequest="80">
+                                            <CollectionView.ItemTemplate>
+                                                <DataTemplate x:DataType="models:IdentitySignal">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto" Padding="0,3">
+                                                        <Frame BackgroundColor="#E8F5E9"
+                                                               CornerRadius="4"
+                                                               Padding="6,2"
+                                                               VerticalOptions="Center">
+                                                            <Label Text="{Binding SignalType}"
+                                                                   FontSize="9"
+                                                                   TextColor="#2E7D32" />
+                                                        </Frame>
+                                                        <Label Grid.Column="1"
+                                                               Text="{Binding Evidence}"
+                                                               FontSize="10"
+                                                               TextColor="{StaticResource TextSecondary}"
+                                                               LineBreakMode="TailTruncation"
+                                                               Margin="8,0"
+                                                               VerticalOptions="Center" />
+                                                        <Label Grid.Column="2"
+                                                               Text="{Binding Weight, StringFormat='+{0}'}"
+                                                               FontSize="10"
+                                                               FontAttributes="Bold"
+                                                               TextColor="#4CAF50"
+                                                               VerticalOptions="Center" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </CollectionView.ItemTemplate>
+                                        </CollectionView>
+                                    </VerticalStackLayout>
+                                    
+                                    <!-- Consistency Analysis -->
+                                    <Frame BackgroundColor="{StaticResource Background}"
+                                           CornerRadius="8"
+                                           Padding="10">
+                                        <VerticalStackLayout Spacing="4">
+                                            <Label Text="Analysis"
+                                                   FontSize="11"
+                                                   FontAttributes="Bold"
+                                                   TextColor="{StaticResource TextPrimary}" />
+                                            <Label Text="{Binding ConsistencyAnalysis}"
+                                                   FontSize="11"
+                                                   TextColor="{StaticResource TextSecondary}" />
+                                        </VerticalStackLayout>
+                                    </Frame>
+                                    
+                                    <!-- Uncertainty Notes -->
+                                    <Frame BackgroundColor="#FFF3CD"
+                                           CornerRadius="8"
+                                           Padding="10">
+                                        <VerticalStackLayout Spacing="4">
+                                            <Label Text="[!] Uncertainties"
+                                                   FontSize="11"
+                                                   FontAttributes="Bold"
+                                                   TextColor="#856404" />
+                                            <Label Text="{Binding UncertaintyNotes}"
+                                                   FontSize="11"
+                                                   TextColor="#856404" />
+                                        </VerticalStackLayout>
+                                    </Frame>
+                                    
+                                </VerticalStackLayout>
+                            </Frame>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+                
+                <!-- Empty State -->
+                <VerticalStackLayout IsVisible="{Binding IsSearching}"
+                                     VerticalOptions="Center" 
+                                     HorizontalOptions="Center"
+                                     Spacing="16"
+                                     Padding="32">
+                    <Label Text="..."
+                           FontSize="48"
+                           HorizontalTextAlignment="Center" />
+                    <Label Text="Analyzing sources..."
+                           FontSize="16"
+                           TextColor="{StaticResource TextSecondary}"
+                           HorizontalTextAlignment="Center" />
+                </VerticalStackLayout>
+                
+            </VerticalStackLayout>
+        </ScrollView>
+
+        <!-- Action Buttons -->
+        <Grid ColumnDefinitions="*,*" 
+              ColumnSpacing="12"
+              Grid.Row="2"
+              Margin="0,12,0,0">
+            
+            <Button Text="← Back"
+                    Command="{Binding GoBackCommand}"
+                    BackgroundColor="{StaticResource Secondary}"
+                    TextColor="White"
+                    FontAttributes="Bold"
+                    CornerRadius="12"
+                    HeightRequest="50"
+                    Grid.Column="0" />
+            
+            <Button Text="Retry"
+                    Command="{Binding RetrySearchCommand}"
+                    BackgroundColor="{StaticResource Primary}"
+                    TextColor="White"
+                    FontAttributes="Bold"
+                    CornerRadius="12"
+                    HeightRequest="50"
+                    Grid.Column="1" />
+        </Grid>
+    </Grid>
+</ContentPage>

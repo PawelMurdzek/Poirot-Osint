@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  poirot-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: poirot-osint-api
+    ports:
+      - "8080:80"
+      - "8443:443"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:80
+      # Set API keys via environment variables for security
+      - Osint__HunterApiKey=${HUNTER_API_KEY:-}
+      - Osint__HibpApiKey=${HIBP_API_KEY:-}
+      - Osint__ClearbitApiKey=${CLEARBIT_API_KEY:-}
+      - Osint__FullContactApiKey=${FULLCONTACT_API_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:80/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3

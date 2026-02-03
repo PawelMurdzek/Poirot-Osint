@@ -1,0 +1,54 @@
+# .NET
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.DotSettings.user
+*.cache
+
+# IDE
+.idea/
+.vscode/
+*.sln.docstates
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+build/
+[Bb]in/
+[Oo]bj/
+
+# NuGet
+*.nupkg
+**/packages/*
+!**/packages/build/
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# MAUI
+*.ipa
+*.apk
+*.aab
+
+# User-specific
+*.rsuser
+*.userosscache
+*.sln.docstates
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+
+# Docker
+docker-compose.override.yml
