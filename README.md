@@ -128,7 +128,6 @@ API keys are configured in `appsettings.json`:
 ## Author
 
 **Piotr Szewczyk**  
-Student ID: 01159112  
 Politechnika Warszawska  
 February 2026
 
