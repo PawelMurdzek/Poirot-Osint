@@ -127,7 +127,7 @@ API keys are configured in `appsettings.json`:
 
 ## Author
 
-**Piotr Szewczyk**  
+**Piotr Szewczyk** and **Paweł Murdzek**
 Politechnika Warszawska  
 February 2026
 
