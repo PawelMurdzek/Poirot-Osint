@@ -4,14 +4,15 @@ using SherlockOsint.Api.Services.OsintProviders;
 namespace SherlockOsint.Api.Services;
 
 /// <summary>
-/// Aggregates OSINT results into target candidates with probability scoring
-/// Uses INPUT DATA (email, phone, nickname) as primary matching criteria
+/// Aggregates OSINT results into target candidates.
+/// Uses Claude AI for probability scoring and identity analysis.
 /// </summary>
 public class CandidateAggregator
 {
     private readonly ILogger<CandidateAggregator> _logger;
     private readonly CountryDetector _countryDetector;
     private readonly IdentityLinker _identityLinker;
+    private readonly ClaudeAnalysisService _claudeAnalysis;
 
     // Platform priorities (1 = highest importance)
     private static readonly Dictionary<string, (int Priority, string Icon)> PlatformInfo = new()
@@ -34,29 +35,36 @@ public class CandidateAggregator
         { "gravatar", (1, "[GR]") }, // High priority because it's EMAIL-VERIFIED
     };
 
-    public CandidateAggregator(ILogger<CandidateAggregator> logger, CountryDetector countryDetector, IdentityLinker identityLinker)
+    public CandidateAggregator(
+        ILogger<CandidateAggregator> logger,
+        CountryDetector countryDetector,
+        IdentityLinker identityLinker,
+        ClaudeAnalysisService claudeAnalysis)
     {
         _logger = logger;
         _countryDetector = countryDetector;
         _identityLinker = identityLinker;
+        _claudeAnalysis = claudeAnalysis;
     }
 
     /// <summary>
-    /// Build target candidates from search results
-    /// NEW APPROACH: Group by unique username, merge only with strong evidence
+    /// Build target candidates from search results.
+    /// Groups results by username, merges where evidence links them,
+    /// then calls Claude to assess probability and generate analysis.
     /// </summary>
-    public List<TargetCandidate> BuildCandidates(SearchRequest request, List<OsintNode> results)
+    public async Task<List<TargetCandidate>> BuildCandidatesAsync(
+        SearchRequest request,
+        List<OsintNode> results,
+        CancellationToken ct = default)
     {
         var candidates = new List<TargetCandidate>();
-        
-        // Extract input data
+
         var inputEmail = request.Email?.ToLower().Trim();
         var inputNickname = NormalizeUsername(request.Nickname ?? "");
-        var inputFullName = NormalizeUsername(request.FullName ?? "");
         var inputPhone = request.Phone;
-        
+
         string? phoneCountry = ExtractPhoneCountry(results);
-        
+
         _logger.LogInformation("Building candidates with inputs: Email={Email}, Nickname={Nickname}, Phone={Phone}",
             inputEmail, inputNickname, inputPhone);
 
@@ -72,22 +80,19 @@ public class CandidateAggregator
             var evidence = BuildSourceEvidence(node, phoneCountry);
             if (evidence == null) continue;
 
-            // STRICT URL NORMALIZATION FOR DEDUPLICATION
             var normalizedUrl = NormalizeUrl(evidence.Url);
             if (string.IsNullOrEmpty(normalizedUrl) || seenUrlsInCandidate.Contains(normalizedUrl)) continue;
-            
+
             seenUrlsInCandidate.Add(normalizedUrl);
-            evidence.Url = normalizedUrl; // Update with normalized version
+            evidence.Url = normalizedUrl;
 
             var normalizedUsername = NormalizeUsername(evidence.Username);
             if (string.IsNullOrEmpty(normalizedUsername)) continue;
 
-            // Group by username
             if (!usernameGroups.ContainsKey(normalizedUsername))
-                usernameGroups[normalizedUsername] = new List<(OsintNode, SourceEvidence)>();
+                usernameGroups[normalizedUsername] = [];
             usernameGroups[normalizedUsername].Add((node, evidence));
 
-            // Track emails for merge detection
             if (evidence.ExtractedData.TryGetValue("email", out var email) && !string.IsNullOrEmpty(email))
             {
                 var lowerEmail = email.ToLower();
@@ -102,18 +107,18 @@ public class CandidateAggregator
         // STEP 2: Detect merges based on shared emails
         var mergeGroups = DetectMergeGroups(usernameGroups.Keys.ToList(), emailToUsernames);
 
-        // STEP 3: Build one candidate per merge group (or single username)
+        // STEP 3: Build one candidate per merge group (sources + basic data, no scoring yet)
         var processedUsernames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        
+
         foreach (var mergeGroup in mergeGroups)
         {
             var primaryUsername = mergeGroup.Usernames.First();
             if (processedUsernames.Contains(primaryUsername)) continue;
 
             var candidate = BuildCandidateFromGroup(
-                request, 
-                mergeGroup.Usernames, 
-                usernameGroups, 
+                request,
+                mergeGroup.Usernames,
+                usernameGroups,
                 mergeGroup.MergeReason,
                 phoneCountry,
                 results);
@@ -126,12 +131,71 @@ public class CandidateAggregator
             }
         }
 
-        // Sort by probability score descending
+        // STEP 4: Call Claude to assess all candidates at once
+        var assessments = await _claudeAnalysis.AnalyzeCandidatesAsync(request, candidates, ct);
+
+        if (assessments.Count > 0)
+        {
+            ApplyClaudeAssessments(candidates, assessments);
+        }
+        else
+        {
+            // Fallback: apply simple rule-based scoring when Claude is unavailable
+            ApplyFallbackScoring(request, candidates, phoneCountry);
+        }
+
         candidates = candidates.OrderByDescending(c => c.ProbabilityScore).ToList();
 
-        _logger.LogInformation("Built {CandidateCount} candidates from {UsernameCount} usernames", 
+        _logger.LogInformation("Built {CandidateCount} candidates from {UsernameCount} usernames",
             candidates.Count, usernameGroups.Count);
         return candidates;
+    }
+
+    /// <summary>
+    /// Apply Claude's assessments to the corresponding candidates.
+    /// </summary>
+    private void ApplyClaudeAssessments(List<TargetCandidate> candidates, List<CandidateAssessment> assessments)
+    {
+        var byId = assessments.ToDictionary(a => a.CandidateId, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var candidate in candidates)
+        {
+            if (!byId.TryGetValue(candidate.Id, out var assessment))
+            {
+                _logger.LogWarning("No Claude assessment for candidate {Id} ({Username})", candidate.Id, candidate.PrimaryUsername);
+                ApplySingleFallbackScore(candidate);
+                continue;
+            }
+
+            candidate.ProbabilityScore = Math.Clamp(assessment.ProbabilityScore, 0, 95);
+            candidate.ConsistencyAnalysis = assessment.ConsistencyAnalysis;
+            candidate.UncertaintyNotes = assessment.UncertaintyNotes;
+            candidate.ProfessionalRole = assessment.ProfessionalRole ?? candidate.ProfessionalRole;
+            candidate.ActivitySummary = assessment.ActivitySummary;
+            candidate.ConfidenceLow = Math.Clamp(assessment.ConfidenceLow, 0, 100);
+            candidate.ConfidenceHigh = Math.Clamp(assessment.ConfidenceHigh, 0, 100);
+        }
+    }
+
+    /// <summary>
+    /// Simple fallback scoring used when Claude API is not available.
+    /// </summary>
+    private void ApplyFallbackScoring(SearchRequest request, List<TargetCandidate> candidates, string? phoneCountry)
+    {
+        foreach (var candidate in candidates)
+            ApplySingleFallbackScore(candidate);
+    }
+
+    private void ApplySingleFallbackScore(TargetCandidate candidate)
+    {
+        var score = candidate.Sources.Sum(s => s.ContributionScore);
+        var highConf = candidate.Sources.Count(s => s.IsHighConfidence);
+
+        candidate.ProbabilityScore = Math.Min(score + highConf * 10, 75);
+        candidate.ConfidenceLow = Math.Max(0, candidate.ProbabilityScore - 15);
+        candidate.ConfidenceHigh = Math.Min(100, candidate.ProbabilityScore + 15);
+        candidate.ConsistencyAnalysis = $"Found {candidate.Sources.Count} platform(s) with username '{candidate.PrimaryUsername}'.";
+        candidate.UncertaintyNotes = "AI analysis unavailable - scores are estimated.";
     }
 
     /// <summary>
@@ -303,18 +367,6 @@ public class CandidateAggregator
         // Professional role
         candidate.ProfessionalRole = InferProfessionalRole(attributes);
         
-        // Calculate score
-        candidate.ProbabilityScore = CalculateScore(request, candidate, phoneCountry);
-        
-        // Confidence interval
-        var (low, high) = CalculateConfidenceInterval(candidate.ProbabilityScore, allSources);
-        candidate.ConfidenceLow = low;
-        candidate.ConfidenceHigh = high;
-
-        // Analysis
-        candidate.ConsistencyAnalysis = GenerateAnalysis(candidate, mergeReason);
-        candidate.UncertaintyNotes = GenerateUncertainty(candidate, request);
-
         // Country distribution
         candidate.CountryDistribution = _countryDetector.AnalyzeCountryProbability(request.Phone, new List<OsintNode>(), request.FullName);
 
@@ -464,79 +516,6 @@ public class CandidateAggregator
     }
 
     /// <summary>
-    /// Calculate overall score for a candidate
-    /// CRITICAL: Requires REAL EVIDENCE, not just platform existence
-    /// </summary>
-    private int CalculateScore(SearchRequest request, TargetCandidate candidate, string? phoneCountry)
-    {
-        // Check what verification we have
-        bool hasEmailInput = !string.IsNullOrEmpty(request.Email);
-        bool hasPhoneInput = !string.IsNullOrEmpty(request.Phone);
-        bool hasNicknameInput = !string.IsNullOrEmpty(request.Nickname);
-        bool hasNameInput = !string.IsNullOrEmpty(request.FullName);
-        
-        // Check if we found any HIGH-CONFIDENCE matches (exact nickname match, email verification)
-        bool hasHighConfidenceMatch = candidate.Sources.Any(s => s.IsHighConfidence);
-        bool hasVerifiedEmail = candidate.VerifiedEmails.Any(e => e.IsVerified);
-        bool hasDiscoveredEmail = candidate.VerifiedEmails.Count > 0;
-        
-        // NO VERIFICATION = MAX 35%
-        // Just finding platforms for a random string means nothing
-        if (!hasEmailInput && !hasPhoneInput && !hasHighConfidenceMatch)
-        {
-            // Without any input verification, cap very low
-            var lowScore = Math.Min(candidate.Sources.Count * 5, 25);
-            
-            // Only boost if we found actual data (not just "platform exists")
-            if (hasDiscoveredEmail)
-                lowScore += 10;
-            
-            return Math.Min(lowScore, 35);
-        }
-
-        // WITH INPUT BUT NO MATCHES = MAX 45%
-        if (!hasHighConfidenceMatch && !hasVerifiedEmail)
-        {
-            var mediumScore = Math.Min(candidate.Sources.Count * 8, 35);
-            
-            if (!string.IsNullOrEmpty(phoneCountry) && candidate.ProbableLocation.Contains(phoneCountry))
-                mediumScore += 10;
-            
-            return Math.Min(mediumScore, 45);
-        }
-
-        // WITH HIGH-CONFIDENCE MATCHES = Can go higher
-        var baseScore = 0;
-
-        // High-confidence matches are worth more
-        var highConfCount = candidate.Sources.Count(s => s.IsHighConfidence);
-        baseScore += highConfCount * 20;
-
-        // Other sources contribute less
-        var otherCount = candidate.Sources.Count - highConfCount;
-        baseScore += Math.Min(otherCount * 8, 20);
-
-        // Verified email is strong evidence
-        if (hasVerifiedEmail)
-            baseScore += 15;
-
-        // Phone country match
-        if (!string.IsNullOrEmpty(phoneCountry) && candidate.ProbableLocation.Contains(phoneCountry))
-            baseScore += 10;
-
-        // Cap based on evidence quality
-        var maxScore = 50;  // Default max
-        if (hasEmailInput || hasPhoneInput)
-            maxScore = 70;
-        if (hasHighConfidenceMatch)
-            maxScore = 85;
-        if (hasVerifiedEmail && hasHighConfidenceMatch)
-            maxScore = 95;
-
-        return Math.Min(baseScore, maxScore);
-    }
-
-    /// <summary>
     /// Infer professional role from attributes
     /// </summary>
     private string? InferProfessionalRole(HashSet<string> attributes)
@@ -549,70 +528,6 @@ public class CandidateAggregator
         if (attributes.Contains("Musician/Audio Creator")) roles.Add("Musician");
 
         return roles.Count > 0 ? string.Join(", ", roles) : null;
-    }
-
-    /// <summary>
-    /// Generate analysis text
-    /// </summary>
-    private string GenerateAnalysis(TargetCandidate candidate, string? mergeReason)
-    {
-        var parts = new List<string>();
-        
-        parts.Add($"Found {candidate.Sources.Count} platform(s) with username '{candidate.PrimaryUsername}'");
-        
-        if (candidate.KnownAliases.Count > 0)
-            parts.Add($"Also uses: {string.Join(", ", candidate.KnownAliases)}");
-        
-        if (!string.IsNullOrEmpty(mergeReason))
-            parts.Add($"Profiles linked: {mergeReason}");
-        
-        if (candidate.VerifiedEmails.Count > 0)
-            parts.Add($"Email(s) found: {string.Join(", ", candidate.VerifiedEmails.Select(e => e.Email))}");
-
-        return string.Join(". ", parts);
-    }
-
-    /// <summary>
-    /// Generate uncertainty notes
-    /// </summary>
-    private string GenerateUncertainty(TargetCandidate candidate, SearchRequest request)
-    {
-        var notes = new List<string>();
-
-        if (candidate.Sources.Count == 1)
-            notes.Add("Single source only - limited verification");
-
-        if (string.IsNullOrEmpty(request.Email))
-            notes.Add("No email provided - identity not email-verified");
-
-        if (candidate.VerifiedEmails.Count == 0)
-            notes.Add("No email discovered from platforms");
-
-        if (candidate.Sources.All(s => !s.IsHighConfidence))
-            notes.Add("No high-confidence matches");
-
-        return notes.Count > 0 ? string.Join(". ", notes) : "Good confidence in this identity";
-    }
-
-    /// <summary>
-    /// Calculate confidence interval
-    /// </summary>
-    private (int Low, int High) CalculateConfidenceInterval(int score, List<SourceEvidence> sources)
-    {
-        var margin = 15;
-
-        // More sources = tighter interval
-        if (sources.Count >= 3) margin -= 3;
-        if (sources.Count >= 5) margin -= 3;
-
-        // High-confidence sources = tighter interval
-        var highConfCount = sources.Count(s => s.IsHighConfidence);
-        if (highConfCount >= 2) margin -= 3;
-
-        var low = Math.Max(0, score - margin);
-        var high = Math.Min(100, score + margin);
-
-        return (low, high);
     }
 
     /// <summary>
