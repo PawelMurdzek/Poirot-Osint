@@ -109,8 +109,8 @@ public class SearchOrchestrator : BackgroundService, ISearchOrchestrator
             _logger.LogInformation("Sent DigitalProfile to {ConnectionId} with {PlatformCount} platforms, {Score}% confidence",
                 connectionId, profile.Platforms.Count, profile.ConfidenceScore);
 
-            // Build and send target candidates with probability scoring
-            var candidates = _candidateAggregator.BuildCandidates(request, allResults);
+            // Build and send target candidates — Claude assesses probability
+            var candidates = await _candidateAggregator.BuildCandidatesAsync(request, allResults, cts.Token);
             await _hubContext.Clients.Client(connectionId).SendAsync("ReceiveCandidates", candidates, cts.Token);
             _logger.LogInformation("Sent {CandidateCount} candidates to {ConnectionId}",
                 candidates.Count, connectionId);

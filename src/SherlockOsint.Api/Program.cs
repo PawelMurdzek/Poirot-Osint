@@ -14,6 +14,14 @@ builder.Services.AddHttpClient("OsintClient", client =>
     client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml");
 });
 
+// Dedicated client for Claude API
+builder.Services.AddHttpClient("Claude", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(60);
+    client.DefaultRequestHeaders.Add("x-api-key", builder.Configuration["Osint:ClaudeApiKey"] ?? "");
+    client.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
+});
+
 // Register OSINT providers
 builder.Services.AddSingleton<GravatarLookup>();
 builder.Services.AddSingleton<GitHubSearch>();
@@ -44,6 +52,7 @@ builder.Services.AddSingleton<NicknamePermutator>();
 
 // Register application services
 builder.Services.AddSingleton<ProfileAggregator>();
+builder.Services.AddSingleton<ClaudeAnalysisService>();
 builder.Services.AddSingleton<CandidateAggregator>();
 builder.Services.AddSingleton<IRealSearchService, RealSearchService>();
 builder.Services.AddSingleton<ISearchOrchestrator, SearchOrchestrator>();
