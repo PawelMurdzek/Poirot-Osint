@@ -8,9 +8,7 @@
 
 ---
 
-**Author:** Piotr Szewczyk  
-**Student ID:** 01159112  
-**Institution:** Politechnika Warszawska  
+**Author:** Paweł Murdzek
 **Date:** February 2026
 
 ---
