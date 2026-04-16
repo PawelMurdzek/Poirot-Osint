@@ -52,3 +52,7 @@ ehthumbs.db
 
 # Docker
 docker-compose.override.yml
+
+# Secrets — never commit API keys
+appsettings.Development.json
+appsettings.Production.json
