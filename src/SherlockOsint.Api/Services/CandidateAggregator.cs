@@ -14,26 +14,58 @@ public class CandidateAggregator
     private readonly IdentityLinker _identityLinker;
     private readonly ClaudeAnalysisService _claudeAnalysis;
 
-    // Platform priorities and icons (1 = highest importance)
-    private static readonly Dictionary<string, (int Priority, string Icon)> PlatformInfo = new()
+    // Single source of truth for known platforms. Adding a platform = one tuple.
+    // Priority semantics: 1 = canonical/verified identity (passes the
+    // PlatformPriority<=2 filter in BuildCandidateFromGroup even with zero
+    // contribution score), 2 = professional/real-name adjacent, 4-5 = lifestyle
+    // / creative, 6 = community/gaming. ExtractPlatformName resolves URL host →
+    // Name from this table; GetPlatformInfo resolves Name → (Priority, Icon).
+    // Previously these two facts lived in separate lists and rotted out of sync
+    // — caused TikTok / ORCID / OpenAlex / StackOverflow to silently default to
+    // priority 5 and disappear from candidate lists.
+    private static readonly (string Host, string Name, int Priority, string Icon)[] Platforms =
     {
-        { "github", (1, "[GH]") },
-        { "linkedin", (1, "[LI]") },
-        { "twitter", (1, "[TW]") },
-        { "x", (1, "[TW]") },
-        { "instagram", (1, "[IG]") },
-        { "tiktok", (1, "[TK]") },
-        { "reddit", (1, "[RD]") },
-        { "gitlab", (1, "[GL]") },
-        { "youtube", (5, "[YT]") },
-        { "twitch", (5, "[TC]") },
-        { "stackoverflow", (6, "[SO]") },
-        { "steam", (6, "[ST]") },
-        { "pypi", (4, "[PY]") },
-        { "replit", (4, "[RP]") },
-        { "soundcloud", (4, "[SC]") },
-        { "gravatar", (1, "[GR]") }, // High priority — email-verified
+        ("github.com",           "GitHub",        1, "[GH]"),
+        ("linkedin.com",         "LinkedIn",      1, "[LI]"),
+        ("twitter.com",          "X",             1, "[TW]"),
+        ("x.com",                "X",             1, "[TW]"),
+        ("instagram.com",        "Instagram",     1, "[IG]"),
+        ("tiktok.com",           "TikTok",        1, "[TK]"),
+        ("reddit.com",           "Reddit",        1, "[RD]"),
+        ("gitlab.com",           "GitLab",        1, "[GL]"),
+        ("gravatar.com",         "Gravatar",      1, "[GR]"), // email-verified
+        ("orcid.org",            "ORCID",         1, "[OR]"), // canonical academic identity
+        ("openalex.org",         "OpenAlex",      1, "[OA]"), // author profile + affiliation
+        ("keybase.io",           "Keybase",       1, "[KB]"), // PGP-verified identity chain
+        ("dev.to",               "DEV.to",        2, "[DV]"),
+        ("news.ycombinator.com", "HackerNews",    2, "[HN]"),
+        ("pypi.org",             "PyPI",          4, "[PY]"),
+        ("replit.com",           "Replit",        4, "[RP]"),
+        ("soundcloud.com",       "SoundCloud",    4, "[SC]"),
+        ("youtube.com",          "YouTube",       5, "[YT]"),
+        ("twitch.tv",            "Twitch",        5, "[TC]"),
+        ("facebook.com",         "Facebook",      5, "[FB]"),
+        ("pinterest.com",        "Pinterest",     5, "[PT]"),
+        ("hackerrank.com",       "HackerRank",    5, "[HR]"),
+        ("roblox.com",           "Roblox",        5, "[RB]"),
+        ("xbox.com",             "Xbox",          5, "[XB]"),
+        ("stackoverflow.com",    "StackOverflow", 6, "[SO]"),
+        ("steamcommunity.com",   "Steam",         6, "[ST]"),
     };
+
+    private static readonly Dictionary<string, (string Name, int Priority, string Icon)> PlatformByHost =
+        Platforms.ToDictionary(p => p.Host, p => (p.Name, p.Priority, p.Icon), StringComparer.OrdinalIgnoreCase);
+
+    private static readonly Dictionary<string, (int Priority, string Icon)> PlatformByName = BuildPlatformNameIndex();
+
+    private static Dictionary<string, (int Priority, string Icon)> BuildPlatformNameIndex()
+    {
+        // X has two host rows (twitter.com, x.com) but one Name — last-write-wins
+        // is fine because both rows carry identical (Priority, Icon).
+        var d = new Dictionary<string, (int Priority, string Icon)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in Platforms) d[p.Name] = (p.Priority, p.Icon);
+        return d;
+    }
 
     public CandidateAggregator(
         ILogger<CandidateAggregator> logger,
@@ -177,9 +209,15 @@ public class CandidateAggregator
         else
         {
             ApplyNoAiAnnotation(candidates);
-            // Order: user-input first, then by source count + high-priority sources
+            // No-AI ordering. The two name-anchored predicates fire BEFORE the
+            // count-based ones because a candidate built from an ORCID/OpenAlex
+            // hit (a name-driven API match) or merged via Pass 3 display-name
+            // similarity carries a much stronger identifying signal than even
+            // 9 priority-1 username squatters on a generic handle. Without
+            // these tie-breakers a real academic loses to "kacper" the squatter.
             candidates = [.. candidates
                 .OrderByDescending(c => c.IsFromUserInput)
+                .ThenByDescending(c => HasNameAnchoredEvidence(c))
                 .ThenByDescending(c => c.Sources.Count(s => s.PlatformPriority <= 2))
                 .ThenByDescending(c => c.Sources.Count)];
         }
@@ -187,6 +225,27 @@ public class CandidateAggregator
         _logger.LogInformation("Built {CandidateCount} candidates from {UsernameCount} usernames (AI={AiUsed})",
             candidates.Count, usernameGroups.Count, assessments.Count > 0);
         return candidates;
+    }
+
+    /// <summary>
+    /// True when the candidate has at least one source whose match was driven
+    /// by the *target name*, not by a username collision: ORCID/OpenAlex
+    /// (free-text author search against the full name), or a Pass 3 merge
+    /// where multiple usernames were stitched together because their display
+    /// names matched the query (e.g. ORCID display "Kacper Gradon" similar to
+    /// OpenAlex display "Kacper Gradoń"). These signals beat raw username
+    /// counts because squatter handles like `kacper` / `kg` produce many
+    /// priority-1 hits but no name corroboration.
+    /// </summary>
+    private static bool HasNameAnchoredEvidence(TargetCandidate c)
+    {
+        if (!string.IsNullOrEmpty(c.MergeReason)
+            && c.MergeReason.StartsWith("Similar display names", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return c.Sources.Any(s =>
+            s.Platform.Equals("ORCID", StringComparison.OrdinalIgnoreCase)
+            || s.Platform.Equals("OpenAlex", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -739,8 +798,8 @@ public class CandidateAggregator
     {
         var label = node.Label?.ToLower() ?? "";
 
-        // Use Host comparison, not substring — substring on the URL matches
-        // "x.com" inside "roblox.com" / "xbox.com" and mislabels both as Twitter.
+        // Host comparison, not substring — "x.com" appears inside "roblox.com" /
+        // "xbox.com" and would mislabel both as Twitter under naive Contains().
         string host = "";
         if (!string.IsNullOrEmpty(node.Value))
         {
@@ -756,26 +815,17 @@ public class CandidateAggregator
             catch { }
         }
 
-        bool HostIs(string domain) => host == domain || host.EndsWith("." + domain);
-
-        if (HostIs("github.com")) return "GitHub";
-        if (HostIs("linkedin.com")) return "LinkedIn";
-        if (HostIs("twitter.com") || HostIs("x.com")) return "X";
-        if (HostIs("facebook.com")) return "Facebook";
-        if (HostIs("instagram.com")) return "Instagram";
-        if (HostIs("youtube.com")) return "YouTube";
-        if (HostIs("twitch.tv")) return "Twitch";
-        if (HostIs("steamcommunity.com")) return "Steam";
-        if (HostIs("reddit.com")) return "Reddit";
-        if (HostIs("gitlab.com")) return "GitLab";
-        if (HostIs("pypi.org")) return "PyPI";
-        if (HostIs("replit.com")) return "Replit";
-        if (HostIs("soundcloud.com")) return "SoundCloud";
-        if (HostIs("gravatar.com")) return "Gravatar";
-        if (HostIs("roblox.com")) return "Roblox";
-        if (HostIs("xbox.com")) return "Xbox";
-        if (HostIs("hackerrank.com")) return "HackerRank";
-        if (HostIs("pinterest.com")) return "Pinterest";
+        if (!string.IsNullOrEmpty(host))
+        {
+            if (PlatformByHost.TryGetValue(host, out var direct)) return direct.Name;
+            // Subdomain fallback — e.g. en.gravatar.com, m.facebook.com,
+            // blog.linkedin.com. Linear scan over ~25 entries is fine.
+            foreach (var entry in PlatformByHost)
+            {
+                if (host.EndsWith("." + entry.Key, StringComparison.OrdinalIgnoreCase))
+                    return entry.Value.Name;
+            }
+        }
 
         return label.Replace("user", "").Trim();
     }
@@ -816,11 +866,8 @@ public class CandidateAggregator
         }
     }
 
-    private (int Priority, string Icon) GetPlatformInfo(string platform)
-    {
-        var key = platform.ToLower();
-        return PlatformInfo.TryGetValue(key, out var info) ? info : (5, "[--]");
-    }
+    private (int Priority, string Icon) GetPlatformInfo(string platform) =>
+        PlatformByName.TryGetValue(platform, out var info) ? info : (5, "[--]");
 
     private string NormalizeUsername(string username) =>
         TextNormalization.StripDiacritics(username.ToLower())

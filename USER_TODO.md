@@ -13,9 +13,11 @@ Plik utrzymywany przez agenta `poirot-builder`. Każda nowa pozycja pojawia się
 
 Wszystkie Tier A providery (Mastodon, Bluesky, Lemmy, HackerNews, 4chan archives, Wykop, DEV.to, **ORCID, OpenAlex**) **nie wymagają kluczy**. Nic nie musisz robić.
 
-### ⬜ ORCID + OpenAlex (akademia — dodane 2026-04-25)
+### ✅ ORCID + OpenAlex (akademia — dodane 2026-04-25, candidate pipeline naprawione 2026-04-26)
 
 Wpięte w Stage 1 przy każdym wyszukiwaniu z `fullName`. ORCID zwraca ORCID iD + pracodawców + edukację, OpenAlex zwraca profil autora + ostatnie afiliacje + works/cites counts. Idealne dla targetów akademickich (naukowcy / lekarze / inżynierowie z patentami) — wcześniej Poirot nie miał żadnego pokrycia tej klasy osób (test case 2026-04-25 — wyszukiwanie po samym `fullName` polskiego akademika zwracało wyłącznie squatter pages).
+
+**2026-04-26 fix:** providery od początku trafiały w upstream, ale `CandidateAggregator` cicho je odrzucał — `orcid.org` / `openalex.org` nie były w jego liście znanych hostów, więc lądowały z priorytetem default 5 i wpadały w filtr `PlatformPriority<=2`. Przy okazji wykryto identyczny bug dla TikTok i StackOverflow. Zrefaktorowane — jedna tabela `Platforms` (host → name+priority+icon) generuje obydwa indexy (`PlatformByHost`, `PlatformByName`), plus dodano Keybase / DEV.to / HackerNews. Sortowanie no-AI ma teraz tie-breaker `HasNameAnchoredEvidence` żeby kandydat zmergowany przez display-name (typowy efekt ORCID+OpenAlex match) bił 9 priority-1 squatterów.
 
 **Endpointy bez klucza:**
 - `https://pub.orcid.org/v3.0/expanded-search/` (5 req/s, polite pool)
