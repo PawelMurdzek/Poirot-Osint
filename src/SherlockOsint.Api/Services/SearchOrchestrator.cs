@@ -33,6 +33,7 @@ public class SearchOrchestrator : BackgroundService, ISearchOrchestrator
     private readonly IRealSearchService _searchService;
     private readonly ProfileAggregator _profileAggregator;
     private readonly CandidateAggregator _candidateAggregator;
+    private readonly PersonalityProfilerService _personalityProfiler;
     private readonly ILogger<SearchOrchestrator> _logger;
 
     public SearchOrchestrator(
@@ -40,12 +41,14 @@ public class SearchOrchestrator : BackgroundService, ISearchOrchestrator
         IRealSearchService searchService,
         ProfileAggregator profileAggregator,
         CandidateAggregator candidateAggregator,
+        PersonalityProfilerService personalityProfiler,
         ILogger<SearchOrchestrator> logger)
     {
         _hubContext = hubContext;
         _searchService = searchService;
         _profileAggregator = profileAggregator;
         _candidateAggregator = candidateAggregator;
+        _personalityProfiler = personalityProfiler;
         _logger = logger;
         _searchQueue = Channel.CreateUnbounded<(SearchRequest, string)>();
         _activeSearches = new ConcurrentDictionary<string, CancellationTokenSource>();
@@ -114,6 +117,23 @@ public class SearchOrchestrator : BackgroundService, ISearchOrchestrator
             await _hubContext.Clients.Client(connectionId).SendAsync("ReceiveCandidates", candidates, cts.Token);
             _logger.LogInformation("Sent {CandidateCount} candidates to {ConnectionId}",
                 candidates.Count, connectionId);
+
+            // Personality profiler — only the TOP-3 by probability, in parallel
+            var top3 = candidates.Take(3).ToList();
+            if (top3.Count > 0)
+            {
+                _logger.LogInformation("Profiling top {Count} candidates for {ConnectionId}", top3.Count, connectionId);
+                await Parallel.ForEachAsync(top3, new ParallelOptions { MaxDegreeOfParallelism = 3, CancellationToken = cts.Token }, async (candidate, innerCt) =>
+                {
+                    var profile = await _personalityProfiler.ProfileAsync(request, candidate, innerCt);
+                    if (profile != null)
+                    {
+                        await _hubContext.Clients.Client(connectionId).SendAsync("ReceivePersonalityProfile", profile, innerCt);
+                        _logger.LogInformation("Sent personality profile for {Candidate} to {ConnectionId}",
+                            candidate.PrimaryUsername, connectionId);
+                    }
+                });
+            }
 
             // Notify client that search is complete
             await _hubContext.Clients.Client(connectionId).SendAsync("SearchCompleted", "Search completed.", cts.Token);

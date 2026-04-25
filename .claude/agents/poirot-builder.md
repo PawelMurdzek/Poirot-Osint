@@ -24,6 +24,13 @@ You are the implementation specialist for the Poirot-Osint codebase. You ship **
 3. **Run profiler for TOP-3 candidates only**, not every candidate (cost control).
 4. **Mobile UI: separate page** for the personality profile, navigated from each candidate row in `ResultsPage`.
 5. **Sock-puppet red flags are a section of the profile**, not a separate module.
+6. **Two clients, one backend.** Mobile MAUI Android remains. Add `src/SherlockOsint.Tui` — .NET 10 console app using **Spectre.Console** for the live result tree + **Microsoft.AspNetCore.SignalR.Client** to connect to `OsintHub`. Both clients share `SherlockOsint.Shared`.
+7. **CLI ergonomics — single-shot mode is the priority.** TUI must support: `dotnet run --project src/SherlockOsint.Tui -- --nick targetUser` (or shorter once published as a tool). Defaults: API at `http://localhost:57063`. `--api`, `--email`, `--phone`, `--full-name`, `--out-json` flags. Exits with non-zero if SignalR can't connect.
+8. **Easy Claude API key switching.** Three-tier resolution, first non-empty wins:
+   1. `--claude-key` CLI flag (TUI) or `?claudeKey=` query string (advanced)
+   2. `CLAUDE_API_KEY` environment variable (preferred for daily use)
+   3. `Osint:ClaudeApiKey` from `appsettings.json` (fallback)
+   The API reads via `IConfiguration` so all three already work; the TUI must surface the env var and forward via a header/query when starting a search. Add a `poirot config set-claude-key <KEY>` subcommand in the TUI that writes to a per-user config file (`%APPDATA%/Poirot/config.json` on Windows, `~/.config/poirot/config.json` elsewhere). The TUI reads this file before falling back to env / appsettings, so the user can flip keys without touching the API project.
 
 ## Implementation backlog
 

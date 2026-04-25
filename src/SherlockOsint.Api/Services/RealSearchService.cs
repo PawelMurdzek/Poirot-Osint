@@ -37,6 +37,10 @@ public class RealSearchService : IRealSearchService
     private readonly MastodonLookup _mastodonLookup;
     private readonly WykopLookup _wykopLookup;
     private readonly FourChanArchiveLookup _fourChanArchiveLookup;
+    private readonly TwitchLookup _twitchLookup;
+    private readonly BilibiliLookup _bilibiliLookup;
+    private readonly VkLookup _vkLookup;
+    private readonly TelegramLookup _telegramLookup;
     private readonly ILogger<RealSearchService> _logger;
 
     public RealSearchService(
@@ -63,6 +67,10 @@ public class RealSearchService : IRealSearchService
         MastodonLookup mastodonLookup,
         WykopLookup wykopLookup,
         FourChanArchiveLookup fourChanArchiveLookup,
+        TwitchLookup twitchLookup,
+        BilibiliLookup bilibiliLookup,
+        VkLookup vkLookup,
+        TelegramLookup telegramLookup,
         ILogger<RealSearchService> logger)
     {
         _gravatarLookup = gravatarLookup;
@@ -88,6 +96,10 @@ public class RealSearchService : IRealSearchService
         _mastodonLookup = mastodonLookup;
         _wykopLookup = wykopLookup;
         _fourChanArchiveLookup = fourChanArchiveLookup;
+        _twitchLookup = twitchLookup;
+        _bilibiliLookup = bilibiliLookup;
+        _vkLookup = vkLookup;
+        _telegramLookup = telegramLookup;
         _logger = logger;
     }
 
@@ -206,6 +218,14 @@ public class RealSearchService : IRealSearchService
                         _wykopLookup.SearchAsync(nick, ct).ContinueWith(t =>
                             { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
                         _fourChanArchiveLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
+                        _twitchLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
+                        _bilibiliLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
+                        _vkLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
+                        _telegramLookup.SearchAsync(nick, ct).ContinueWith(t =>
                             { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct)
                     };
                     await Task.WhenAll(perHandleTasks);

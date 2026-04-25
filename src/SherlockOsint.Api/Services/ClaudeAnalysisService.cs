@@ -52,9 +52,12 @@ public class ClaudeAnalysisService
 
         var prompt = BuildPrompt(request, candidates);
 
+        var model = _config["Osint:ClaudeModel"];
+        if (string.IsNullOrWhiteSpace(model)) model = "claude-sonnet-4-6";
+
         var requestBody = new
         {
-            model = "claude-sonnet-4-6",
+            model,
             max_tokens = 2048,
             messages = new[]
             {

@@ -57,6 +57,11 @@ builder.Services.AddSingleton<LemmyLookup>();
 builder.Services.AddSingleton<MastodonLookup>();
 builder.Services.AddSingleton<WykopLookup>();
 builder.Services.AddSingleton<FourChanArchiveLookup>();
+// Phase 8: Tier B — keyed APIs (Twitch / VK / Telegram) and Bilibili (no key)
+builder.Services.AddSingleton<TwitchLookup>();
+builder.Services.AddSingleton<BilibiliLookup>();
+builder.Services.AddSingleton<VkLookup>();
+builder.Services.AddSingleton<TelegramLookup>();
 
 // Register application services
 builder.Services.AddSingleton<ProfileAggregator>();
@@ -65,6 +70,11 @@ builder.Services.AddSingleton<CandidateAggregator>();
 builder.Services.AddSingleton<IRealSearchService, RealSearchService>();
 builder.Services.AddSingleton<ISearchOrchestrator, SearchOrchestrator>();
 builder.Services.AddHostedService(sp => (SearchOrchestrator)sp.GetRequiredService<ISearchOrchestrator>());
+
+// Knowledge base + personality profiler
+builder.Services.AddSingleton<SherlockOsint.Api.Services.Knowledge.KnowledgeBase>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SherlockOsint.Api.Services.Knowledge.KnowledgeBase>());
+builder.Services.AddSingleton<PersonalityProfilerService>();
 
 // Configure CORS for mobile client
 builder.Services.AddCors(options =>
