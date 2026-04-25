@@ -86,7 +86,7 @@ Mobile SearchPage
 
 Deduplication is by **normalized URL** (strips scheme, `www.`, trailing `/`, normalizes `x.com` → `twitter.com`) in a single `ConcurrentDictionary`. Nodes whose `Value` is not a URL bypass the dedup. Cancellation is cooperative via the `CancellationToken` from `SearchOrchestrator`.
 
-Several providers exist in `Services/OsintProviders/` (e.g. `DomainWhoisLookup`, `PgpKeyserverLookup`, `ProfileVerifier`, `WaybackMachineLookup`) that are registered in `Program.cs` but **not currently invoked** by `RealSearchService`.
+Several providers exist in `Services/OsintProviders/` (e.g. `DomainWhoisLookup`, `PgpKeyserverLookup`, `WaybackMachineLookup`) that are registered in `Program.cs` but **not currently invoked** by `RealSearchService`. `ProfileVerifier` is now invoked from inside `UsernameSearch.CheckPlatformAsync` — it runs a second pass on the HTML each platform already fetches, extracting display name / bio / location and a confidence score that flow into `OsintNode` children (labels `Name`, `📝 Bio`, `Location`, `Verification`).
 
 ### Key Services (API)
 
@@ -103,7 +103,7 @@ Several providers exist in `Services/OsintProviders/` (e.g. `DomainWhoisLookup`,
 
 The `OsintProviders/` folder contains 21 `.cs` files, but they fall into three groups:
 - **Active providers** registered as singletons in `Program.cs` and invoked by `RealSearchService` (most files).
-- **Registered but unused** — `DomainWhoisLookup`, `PgpKeyserverLookup`, `ProfileVerifier` are in `Program.cs` but not currently wired into either pipeline stage.
+- **Registered but unused** — `DomainWhoisLookup`, `PgpKeyserverLookup` are in `Program.cs` but not currently wired into either pipeline stage. `ProfileVerifier` is also registered there but invoked transitively from `UsernameSearch` (constructor-injected, second-pass HTML analysis).
 - **Not registered at all** — `WaybackMachineLookup.cs` exists on disk but is missing from `Program.cs`.
 - **Helper, not a provider** — `IdentityLinker` is a merge utility used by `CandidateAggregator`, not a data source.
 

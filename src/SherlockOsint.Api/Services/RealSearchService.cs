@@ -159,9 +159,22 @@ public class RealSearchService : IRealSearchService
                 return;
             }
 
-            var normalized = node.Value.TrimEnd('/').ToLower()
-                .Replace("https://", "").Replace("http://", "").Replace("www.", "")
-                .Replace("x.com", "twitter.com");
+            string normalized;
+            try
+            {
+                var uri = new Uri(node.Value);
+                var host = uri.Host.ToLowerInvariant();
+                if (host.StartsWith("www.")) host = host[4..];
+                // Treat x.com as twitter.com — but only when it really is the X host
+                // (substring replace previously turned "roblox.com" into "roblotwitter.com").
+                if (host == "x.com" || host.EndsWith(".x.com")) host = "twitter.com";
+                normalized = (host + uri.PathAndQuery).TrimEnd('/').ToLowerInvariant();
+            }
+            catch
+            {
+                normalized = node.Value.TrimEnd('/').ToLowerInvariant()
+                    .Replace("https://", "").Replace("http://", "").Replace("www.", "");
+            }
 
             if (seenUrls.TryAdd(normalized, true))
             {
@@ -328,18 +341,26 @@ public class RealSearchService : IRealSearchService
     private string? ExtractHandleFromUrl(string? url)
     {
         if (string.IsNullOrEmpty(url) || !url.StartsWith("http")) return null;
-        if (url.Contains("github.com/") || url.Contains("twitter.com/") || url.Contains("x.com/") || url.Contains("linkedin.com/in/") || url.Contains("instagram.com/"))
+
+        string host;
+        try
         {
-            var parts = url.TrimEnd('/').Split('/');
-            if (parts.Length > 0)
-            {
-                var handle = parts.Last().TrimStart('@');
-                // Basic cleanup for messy URLs
-                if (handle.Contains("?")) handle = handle.Split('?')[0];
-                return handle;
-            }
+            var uri = new Uri(url);
+            host = uri.Host.ToLowerInvariant();
+            if (host.StartsWith("www.")) host = host[4..];
         }
-        return null;
+        catch { return null; }
+
+        // Host-based — substring matched "x.com/" inside "roblox.com/" and "xbox.com/".
+        var isHandleHost = host is "github.com" or "twitter.com" or "x.com" or "instagram.com"
+            || (host == "linkedin.com" && url.Contains("/in/", StringComparison.OrdinalIgnoreCase));
+        if (!isHandleHost) return null;
+
+        var parts = url.TrimEnd('/').Split('/');
+        if (parts.Length == 0) return null;
+        var handle = parts.Last().TrimStart('@');
+        if (handle.Contains("?")) handle = handle.Split('?')[0];
+        return handle;
     }
 
     private OsintNode VerifiedProfileToNode(VerifiedProfile p)

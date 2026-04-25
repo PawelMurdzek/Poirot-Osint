@@ -689,6 +689,24 @@ public class CandidateAggregator
             var uri = new Uri(node.Value);
             if (uri.Host.Contains("gravatar")) return null;
 
+            // Some platforms put the username in the query string, not the path
+            // (xbox: /en-us/profile?gamertag=, roblox: /user.aspx?username=).
+            // Without this, ExtractUsername would return "en-us" or "user.aspx".
+            if (uri.Query.Length > 1)
+            {
+                foreach (var pair in uri.Query.TrimStart('?').Split('&'))
+                {
+                    var eq = pair.IndexOf('=');
+                    if (eq <= 0) continue;
+                    var key = pair[..eq].ToLowerInvariant();
+                    if (key is "username" or "user" or "gamertag" or "u" or "id" or "screen_name")
+                    {
+                        var val = Uri.UnescapeDataString(pair[(eq + 1)..]);
+                        if (!string.IsNullOrWhiteSpace(val)) return val;
+                    }
+                }
+            }
+
             var path = uri.AbsolutePath.Trim('/');
             foreach (var prefix in new[] { "user/", "users/", "@", "u/", "id/", "in/", "avatar/" })
             {
@@ -703,22 +721,44 @@ public class CandidateAggregator
     private string ExtractPlatformName(OsintNode node)
     {
         var label = node.Label?.ToLower() ?? "";
-        var url = node.Value?.ToLower() ?? "";
 
-        if (url.Contains("github.com")) return "GitHub";
-        if (url.Contains("linkedin.com")) return "LinkedIn";
-        if (url.Contains("twitter.com") || url.Contains("x.com")) return "X";
-        if (url.Contains("facebook.com")) return "Facebook";
-        if (url.Contains("instagram.com")) return "Instagram";
-        if (url.Contains("youtube.com")) return "YouTube";
-        if (url.Contains("twitch.tv")) return "Twitch";
-        if (url.Contains("steamcommunity.com")) return "Steam";
-        if (url.Contains("reddit.com")) return "Reddit";
-        if (url.Contains("gitlab.com")) return "GitLab";
-        if (url.Contains("pypi.org")) return "PyPI";
-        if (url.Contains("replit.com")) return "Replit";
-        if (url.Contains("soundcloud.com")) return "SoundCloud";
-        if (url.Contains("gravatar.com")) return "Gravatar";
+        // Use Host comparison, not substring — substring on the URL matches
+        // "x.com" inside "roblox.com" / "xbox.com" and mislabels both as Twitter.
+        string host = "";
+        if (!string.IsNullOrEmpty(node.Value))
+        {
+            try
+            {
+                var raw = node.Value.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                    ? node.Value
+                    : "https://" + node.Value;
+                var uri = new Uri(raw);
+                host = uri.Host.ToLowerInvariant();
+                if (host.StartsWith("www.")) host = host[4..];
+            }
+            catch { }
+        }
+
+        bool HostIs(string domain) => host == domain || host.EndsWith("." + domain);
+
+        if (HostIs("github.com")) return "GitHub";
+        if (HostIs("linkedin.com")) return "LinkedIn";
+        if (HostIs("twitter.com") || HostIs("x.com")) return "X";
+        if (HostIs("facebook.com")) return "Facebook";
+        if (HostIs("instagram.com")) return "Instagram";
+        if (HostIs("youtube.com")) return "YouTube";
+        if (HostIs("twitch.tv")) return "Twitch";
+        if (HostIs("steamcommunity.com")) return "Steam";
+        if (HostIs("reddit.com")) return "Reddit";
+        if (HostIs("gitlab.com")) return "GitLab";
+        if (HostIs("pypi.org")) return "PyPI";
+        if (HostIs("replit.com")) return "Replit";
+        if (HostIs("soundcloud.com")) return "SoundCloud";
+        if (HostIs("gravatar.com")) return "Gravatar";
+        if (HostIs("roblox.com")) return "Roblox";
+        if (HostIs("xbox.com")) return "Xbox";
+        if (HostIs("hackerrank.com")) return "HackerRank";
+        if (HostIs("pinterest.com")) return "Pinterest";
 
         return label.Replace("user", "").Trim();
     }

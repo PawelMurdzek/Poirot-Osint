@@ -13,6 +13,7 @@ public class UsernameSearch
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<UsernameSearch> _logger;
+    private readonly ProfileVerifier _profileVerifier;
     private readonly SemaphoreSlim _semaphore = new(20, 20); // Limit concurrent requests
 
     // Platforms to check - organized by OSINT importance
@@ -83,10 +84,11 @@ public class UsernameSearch
         new("MyAnimeList", "https://myanimelist.net/profile/{}", "myanimelist.net", 6, "[MA]"),
     };
 
-    public UsernameSearch(IHttpClientFactory httpClientFactory, ILogger<UsernameSearch> logger)
+    public UsernameSearch(IHttpClientFactory httpClientFactory, ILogger<UsernameSearch> logger, ProfileVerifier profileVerifier)
     {
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _profileVerifier = profileVerifier;
     }
 
     /// <summary>
@@ -308,18 +310,30 @@ public class UsernameSearch
             string? location = null;
             string? bio = null;
             string? photoUrl = null;
+            string? displayName = null;
+            decimal verificationConfidence = 0m;
+            List<string>? verificationEvidence = null;
 
             if (response.IsSuccessStatusCode)
             {
                 var content = await response.Content.ReadAsStringAsync(ct);
-                
+
                 // Platform-specific validation
                 exists = ValidateProfileExists(platform.Name, content, username);
-                
+
                 if (exists)
                 {
-                    // Extract additional data if available
                     (location, bio, photoUrl) = ExtractProfileData(platform.Name, content);
+
+                    // Second-pass verification on the same HTML — extracts display name,
+                    // confirms profile is real (not a squatter placeholder), and adds
+                    // a confidence score we can hand to CandidateAggregator.
+                    var verification = _profileVerifier.VerifyContent(platform.Name, content, username);
+                    displayName = verification.DisplayName;
+                    if (string.IsNullOrEmpty(bio) && !string.IsNullOrEmpty(verification.Bio)) bio = verification.Bio;
+                    if (string.IsNullOrEmpty(location) && !string.IsNullOrEmpty(verification.Location)) location = verification.Location;
+                    verificationConfidence = verification.Confidence;
+                    verificationEvidence = verification.Evidence;
                 }
             }
             // Some platforms return 200 even for non-existent users, so we check content
@@ -375,6 +389,34 @@ public class UsernameSearch
                         Id = Guid.NewGuid().ToString(),
                         Label = "📷 Photo",
                         Value = photoUrl,
+                        Depth = 2
+                    });
+                }
+
+                // ProfileVerifier display name — labelled "Name" so CandidateAggregator's
+                // ExtractNodeData maps it to evidence.DisplayName, which then drives
+                // cross-platform name-match scoring in IdentityLinker.
+                if (!string.IsNullOrEmpty(displayName))
+                {
+                    node.Children.Add(new OsintNode
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        Label = "Name",
+                        Value = displayName,
+                        Depth = 2
+                    });
+                }
+
+                if (verificationConfidence > 0m)
+                {
+                    var summary = verificationEvidence != null && verificationEvidence.Count > 0
+                        ? string.Join("; ", verificationEvidence)
+                        : "verified";
+                    node.Children.Add(new OsintNode
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        Label = "Verification",
+                        Value = $"{verificationConfidence:0.00} — {summary}",
                         Depth = 2
                     });
                 }

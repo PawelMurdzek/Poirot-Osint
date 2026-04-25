@@ -88,6 +88,26 @@ Bilibili nie wymaga klucza dla podstawowego user search. Provider działa od raz
 
 ---
 
+### ⏭️ EmailRep.io (reputacja emaila + linkowane profile)
+
+**Co dostaniesz:** dla podanego emaila — reputacja (suspicious / spam / malicious), data pierwszej obserwacji w wyciekach, lista znanych profili powiązanych (LinkedIn, GitHub, Twitter itp.). Provider `EmailRepCheck` jest **już zarejestrowany w `Program.cs` i wpięty w Stage 2** `RealSearchService` (uruchamia się dla każdego maila wykrytego w Stage 1).
+
+**Działa bez klucza** — free tier daje **100 zapytań/dzień**. Klucz API podnosi limit i daje stabilniejsze odpowiedzi.
+
+**Krok po kroku (jeśli chcesz klucz):**
+1. Wejdź na https://emailrep.io/key → wpisz email + zaakceptuj ToS
+2. Klucz przyjdzie mailem w ciągu paru minut
+3. Wklej do `src/SherlockOsint.Api/appsettings.json` (placeholder już dodany):
+   ```json
+   "EmailRepApiKey": "<twoj_klucz>"
+   ```
+
+**Koszt:** Darmowe (free tier). Paid plany dla wyższego throughput.
+
+**Note (2026-04-25):** placeholder `EmailRepApiKey` został dodany do `appsettings.json` przy okazji fixa parsera username (xbox `?gamertag=` / roblox `?username=`). Wcześniej kod czytał `Osint:EmailRepApiKey` ale w `appsettings.json` nie było wpisu — działało tylko jeśli ustawiłeś przez env var.
+
+---
+
 ### ⬜ Numverify (telefon → kraj / operator / line type)
 
 **Co dostaniesz:** dla podanego numeru telefonu — kraj, operator, typ linii (mobile/landline/voip), format E.164. **Bez nazwiska** — to nie jest reverse-name-lookup.

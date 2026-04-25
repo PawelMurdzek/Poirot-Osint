@@ -28,41 +28,60 @@ function Stop-PoirotServer {
     }
 }
 
-# 1) Boot API
-Write-Step "[1/6] starting API in background"
-$srv = Start-Process -FilePath dotnet `
-    -ArgumentList 'run','--project','src/SherlockOsint.Api' `
-    -RedirectStandardOutput $logPath `
-    -RedirectStandardError $errPath `
-    -NoNewWindow -PassThru
-$srv.Id | Set-Content -Encoding utf8 $pidPath
-Write-Step "      pid=$($srv.Id) | log=$logPath"
+# 1) Boot API — but reuse an existing instance if /health already responds.
+#    This handles the common case where a previous run left dotnet orphaned:
+#    starting a second one would fail to bind :57063 silently.
+$apiBase = "http://127.0.0.1:57063"
+$reused = $false
+try {
+    $probe = Invoke-WebRequest "$apiBase/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+    if ($probe.StatusCode -eq 200) {
+        Write-Step "[1/6] API already up on :57063 - reusing existing instance"
+        $reused = $true
+        $srv = $null
+    }
+} catch { }
+
+if (-not $reused) {
+    Write-Step "[1/6] starting API in background"
+    $srv = Start-Process -FilePath dotnet `
+        -ArgumentList 'run','--project','src/SherlockOsint.Api' `
+        -RedirectStandardOutput $logPath `
+        -RedirectStandardError $errPath `
+        -NoNewWindow -PassThru
+    $srv.Id | Set-Content -Encoding utf8 $pidPath
+    Write-Step "      pid=$($srv.Id) | log=$logPath"
+}
 
 try {
     # 2) Wait for /health. Use 127.0.0.1 explicitly: PowerShell on Windows often
     #    resolves "localhost" to ::1 first, but Kestrel here binds 0.0.0.0 only
     #    (see Properties/launchSettings.json) — so localhost would loop forever.
-    Write-Step "[2/6] waiting for /health (up to 60s)"
-    $apiBase = "http://127.0.0.1:57063"
-    $deadline = (Get-Date).AddSeconds(60)
-    $attempt = 0
-    do {
-        Start-Sleep -Seconds 1
-        $attempt++
-        try {
-            $resp = Invoke-WebRequest "$apiBase/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
-            $up = ($resp.StatusCode -eq 200)
-        } catch { $up = $false }
-        if (-not $up -and ($attempt % 5 -eq 0)) {
-            Write-Step "      still waiting... ($attempt s)"
+    if ($reused) {
+        Write-Step "[2/6] /health already green (reused server)"
+    } else {
+        Write-Step "[2/6] waiting for /health (up to 60s)"
+        $deadline = (Get-Date).AddSeconds(60)
+        $attempt = 0
+        $up = $false
+        while (-not $up) {
+            Start-Sleep -Seconds 1
+            $attempt++
+            try {
+                $resp = Invoke-WebRequest "$apiBase/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+                $up = ($resp.StatusCode -eq 200)
+            } catch { $up = $false }
+            if (-not $up -and ($attempt % 5 -eq 0)) {
+                Write-Step "      still waiting... ($attempt s)"
+            }
+            if ((Get-Date) -gt $deadline) {
+                $tail = Get-Content $logPath -Tail 30 -ErrorAction SilentlyContinue
+                $errTail = Get-Content $errPath -Tail 30 -ErrorAction SilentlyContinue
+                throw "API did not come up within 60s.`n--- stdout tail ---`n$tail`n--- stderr tail ---`n$errTail"
+            }
         }
-        if ((Get-Date) -gt $deadline) {
-            $tail = Get-Content $logPath -Tail 30 -ErrorAction SilentlyContinue
-            $errTail = Get-Content $errPath -Tail 30 -ErrorAction SilentlyContinue
-            throw "API did not come up within 60s.`n--- stdout tail ---`n$tail`n--- stderr tail ---`n$errTail"
-        }
-    } while (-not $up)
-    Write-Step "      server up after $attempt s"
+        Write-Step "      server up after $attempt s"
+    }
 
     # 3) Ensure SignalR client deps
     Write-Step "[3/6] ensuring Node + @microsoft/signalr"
@@ -166,10 +185,12 @@ await c.invoke("StartSearch", req);
     }
 }
 finally {
-    if (-not $KeepServer) {
+    if ($reused) {
+        Write-Step "leaving reused server alone (this run did not start it)"
+    } elseif (-not $KeepServer) {
         Stop-PoirotServer
     } else {
-        $kid = $srv.Id
+        $kid = if ($srv) { $srv.Id } else { '?' }
         Write-Step "server left running on pid=$kid (Stop-Process -Id $kid to kill)"
     }
 }
