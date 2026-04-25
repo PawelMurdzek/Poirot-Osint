@@ -44,6 +44,8 @@ public class RealSearchService : IRealSearchService
     private readonly HackerRankLookup _hackerRankLookup;
     private readonly FourProgrammersLookup _fourProgrammersLookup;
     private readonly NumverifyLookup _numverifyLookup;
+    private readonly OrcidLookup _orcidLookup;
+    private readonly OpenAlexLookup _openAlexLookup;
     private readonly ILogger<RealSearchService> _logger;
 
     public RealSearchService(
@@ -77,6 +79,8 @@ public class RealSearchService : IRealSearchService
         HackerRankLookup hackerRankLookup,
         FourProgrammersLookup fourProgrammersLookup,
         NumverifyLookup numverifyLookup,
+        OrcidLookup orcidLookup,
+        OpenAlexLookup openAlexLookup,
         ILogger<RealSearchService> logger)
     {
         _gravatarLookup = gravatarLookup;
@@ -109,6 +113,8 @@ public class RealSearchService : IRealSearchService
         _hackerRankLookup = hackerRankLookup;
         _fourProgrammersLookup = fourProgrammersLookup;
         _numverifyLookup = numverifyLookup;
+        _orcidLookup = orcidLookup;
+        _openAlexLookup = openAlexLookup;
         _logger = logger;
     }
 
@@ -127,6 +133,12 @@ public class RealSearchService : IRealSearchService
         var discoveredEmails = new ConcurrentBag<string>();
         var processedEmails = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         var processedNicks = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+        // Pre-compute the set of name tokens UsernameSearch will use to gate
+        // priority-1 platform matches. Tokens are diacritic-stripped + lowercased
+        // so a profile whose display name is the bare-ASCII form ("Gradon") still
+        // matches a query that used the diacritic ("Gradoń").
+        var nameTokens = BuildNameTokens(request.FullName);
 
         if (!string.IsNullOrEmpty(request.Nickname)) discoveredHandles.Add(request.Nickname);
         if (!string.IsNullOrEmpty(request.Email)) discoveredEmails.Add(request.Email);
@@ -217,18 +229,40 @@ public class RealSearchService : IRealSearchService
 
                 if (!string.IsNullOrEmpty(request.Email) || !string.IsNullOrEmpty(request.FullName))
                 {
-                    enrichmentTasks.Add(_githubSearch.SearchAsync(request.FullName ?? "", request.Email, ct).ContinueWith(t => 
+                    enrichmentTasks.Add(_githubSearch.SearchAsync(request.FullName ?? "", request.Email, ct).ContinueWith(t =>
                         { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) { AddResult(n); var h = ExtractHandleFromUrl(n.Value); if (h != null) discoveredHandles.Add(h); foreach (var email in ExtractEmailsFromNode(n)) discoveredEmails.Add(email); } }));
-                    
-                    enrichmentTasks.Add(_gitlabSearch.SearchAsync(request.FullName ?? "", request.Email, ct).ContinueWith(t => 
+
+                    enrichmentTasks.Add(_gitlabSearch.SearchAsync(request.FullName ?? "", request.Email, ct).ContinueWith(t =>
                         { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) { AddResult(n); var h = ExtractHandleFromUrl(n.Value); if (h != null) discoveredHandles.Add(h); foreach (var email in ExtractEmailsFromNode(n)) discoveredEmails.Add(email); } }));
+                }
+
+                // Academic identity — ORCID + OpenAlex fire on fullName alone.
+                // Both surface ORCID iD, affiliations, and (for OpenAlex) works/cites counts —
+                // for academic targets these collapse the candidate set to one canonical record.
+                if (!string.IsNullOrEmpty(request.FullName))
+                {
+                    enrichmentTasks.Add(_orcidLookup.SearchAsync(request.FullName, ct).ContinueWith(t =>
+                        { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) { AddResult(n); foreach (var email in ExtractEmailsFromNode(n)) discoveredEmails.Add(email); } }));
+
+                    enrichmentTasks.Add(_openAlexLookup.SearchAsync(request.FullName, ct).ContinueWith(t =>
+                        { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }));
                 }
 
                 var searchQuery = request.Nickname ?? request.FullName;
                 if (!string.IsNullOrEmpty(searchQuery))
                 {
-                    enrichmentTasks.Add(_webSearchProvider.SearchAsync(searchQuery, ct).ContinueWith(t => 
+                    enrichmentTasks.Add(_webSearchProvider.SearchAsync(searchQuery, ct).ContinueWith(t =>
                         { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) { AddResult(n); foreach (var h in ExtractHandlesFromNode(n)) discoveredHandles.Add(h); } }));
+                }
+
+                // LinkedIn discovery via DDG HTML site-search runs on full name only —
+                // a permutated nickname rarely surfaces a LinkedIn profile, while a real
+                // name almost always does. Each hit feeds discoveredHandles via the
+                // /in/<handle> URL, so Stage 2 will pick it up like any other handle.
+                if (!string.IsNullOrEmpty(request.FullName))
+                {
+                    enrichmentTasks.Add(_webSearchProvider.SearchLinkedInProfilesAsync(request.FullName!, ct).ContinueWith(t =>
+                        { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) { AddResult(n); foreach (var child in n.Children) { AddResult(child); var h = ExtractHandleFromUrl(child.Value); if (h != null) discoveredHandles.Add(h); } } }));
                 }
 
                 await Task.WhenAll(enrichmentTasks);
@@ -247,7 +281,7 @@ public class RealSearchService : IRealSearchService
                     {
                         Task.Run(async () =>
                         {
-                            await foreach (var node in _usernameSearch.SearchAsync(nick, ct)) AddResult(node);
+                            await foreach (var node in _usernameSearch.SearchAsync(nick, nameTokens, ct)) AddResult(node);
                         }, ct),
                         _hackerNewsLookup.SearchAsync(nick, ct).ContinueWith(t =>
                             { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) { AddResult(n); foreach (var email in ExtractEmailsFromNode(n)) discoveredEmails.Add(email); } }, ct),
@@ -385,6 +419,23 @@ public class RealSearchService : IRealSearchService
             Depth = 1,
             Children = children
         };
+    }
+
+    /// <summary>
+    /// Build the set of name tokens used to gate priority-1 platform matches in
+    /// <see cref="UsernameSearch"/>. Splits the full name on whitespace, strips
+    /// diacritics, lowercases, drops single-char particles. Returns an empty
+    /// collection when no full name is present so the gate is skipped.
+    /// </summary>
+    private static IReadOnlyCollection<string> BuildNameTokens(string? fullName)
+    {
+        if (string.IsNullOrWhiteSpace(fullName)) return Array.Empty<string>();
+        return fullName
+            .Split(new[] { ' ', '\t', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(t => UsernameSearch.StripDiacritics(t.ToLowerInvariant()).Trim())
+            .Where(t => t.Length >= 2)
+            .Distinct()
+            .ToList();
     }
 
     private IEnumerable<string> ExtractEmailsFromNode(OsintNode node)

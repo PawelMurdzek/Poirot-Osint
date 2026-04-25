@@ -1,4 +1,5 @@
 using SherlockOsint.Shared.Models;
+using SherlockOsint.Api.Services;
 using System.Text.Json;
 
 namespace SherlockOsint.Api.Services.OsintProviders;
@@ -21,14 +22,23 @@ public class GitHubSearch
     public async Task<List<OsintNode>> SearchAsync(string fullName, string? email, CancellationToken ct = default)
     {
         var results = new List<OsintNode>();
-        
+
         // Try searching by name
         if (!string.IsNullOrWhiteSpace(fullName))
         {
             var nameResults = await SearchUsersAsync(fullName, ct);
             results.AddRange(nameResults);
+
+            // Fallback for accented names — many GitHub bios store ASCII form even
+            // when the full name has diacritics (e.g. "Władysław" registered as
+            // "Wladyslaw"). Only retry when first pass found nothing.
+            if (nameResults.Count == 0 && TextNormalization.HasDiacritics(fullName))
+            {
+                var asciiResults = await SearchUsersAsync(TextNormalization.StripDiacritics(fullName), ct);
+                results.AddRange(asciiResults);
+            }
         }
-        
+
         // Try searching by email
         if (!string.IsNullOrWhiteSpace(email))
         {

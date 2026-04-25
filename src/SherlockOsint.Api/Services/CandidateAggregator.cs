@@ -429,12 +429,15 @@ public class CandidateAggregator
         };
 
         var allSources = new List<SourceEvidence>();
-        var discoveredNames = new List<string>();
         var discoveredEmails = new List<VerifiedEmail>();
-        var locations = new List<string>();
-        var photos = new List<string>();
         var attributes = new HashSet<string>();
         var seenUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Enrichment-side accumulators (Hunter/Clearbit/FullContact) are kept separate from
+        // platform-source accumulators so that platform data filtered out by
+        // bestSourcesPerPlatform doesn't leak into ProbableLocation / PhotoUrl / Name.
+        var enrichmentNames = new List<string>();
+        var enrichmentLocations = new List<string>();
+        var enrichmentPhotos = new List<string>();
 
         foreach (var username in usernames)
         {
@@ -448,12 +451,6 @@ public class CandidateAggregator
                 ScoreEvidence(request, evidence, phoneCountry);
                 allSources.Add(evidence);
 
-                if (evidence.ExtractedData.TryGetValue("name", out var name) && !string.IsNullOrEmpty(name))
-                    discoveredNames.Add(name);
-                if (evidence.ExtractedData.TryGetValue("location", out var loc) && !string.IsNullOrEmpty(loc))
-                    locations.Add(loc);
-                if (evidence.ExtractedData.TryGetValue("photo", out var photo) && !string.IsNullOrEmpty(photo))
-                    photos.Add(photo);
                 if (evidence.ExtractedData.TryGetValue("email", out var email) && !string.IsNullOrEmpty(email))
                 {
                     discoveredEmails.Add(new VerifiedEmail
@@ -485,16 +482,11 @@ public class CandidateAggregator
             if (node.Value?.Equals(request.Email, StringComparison.OrdinalIgnoreCase) == true ||
                 discoveredEmails.Any(e => e.Email.Equals(node.Value, StringComparison.OrdinalIgnoreCase)))
             {
-                ProcessEnrichmentNode(node, discoveredNames, discoveredEmails, locations, attributes, photos);
+                ProcessEnrichmentNode(node, enrichmentNames, discoveredEmails, enrichmentLocations, attributes, enrichmentPhotos);
             }
         }
 
         if (allSources.Count == 0) return null;
-
-        var bestName = GetMostCommon(discoveredNames);
-        candidate.Name = !string.IsNullOrEmpty(bestName) ? bestName
-            : !string.IsNullOrEmpty(request.FullName) ? request.FullName
-            : usernames.First();
 
         // Best source per platform, filtered for noise
         var bestSourcesPerPlatform = allSources
@@ -504,13 +496,38 @@ public class CandidateAggregator
             .ToList();
 
         candidate.Sources = [.. bestSourcesPerPlatform.OrderByDescending(s => s.ContributionScore).ThenBy(s => s.PlatformPriority)];
+
+        // Re-derive name / location / photo strictly from the *displayed* sources so the
+        // candidate's headline values match what the user actually sees in `sources[]`.
+        // Falls back to enrichment data (Hunter/Clearbit/FullContact, tied to email not
+        // platform) and finally to the search request itself.
+        var displayedNames = candidate.Sources
+            .Select(s => s.ExtractedData.TryGetValue("name", out var n) ? n : null)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Cast<string>()
+            .ToList();
+        var displayedLocations = candidate.Sources
+            .Select(s => s.ExtractedData.TryGetValue("location", out var l) ? l : null)
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .Cast<string>()
+            .ToList();
+        var displayedPhotos = candidate.Sources
+            .Select(s => s.ExtractedData.TryGetValue("photo", out var p) ? p : null)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Cast<string>()
+            .ToList();
+
+        var bestName = GetMostCommon(displayedNames) ?? GetMostCommon(enrichmentNames);
+        candidate.Name = !string.IsNullOrEmpty(bestName) ? bestName
+            : !string.IsNullOrEmpty(request.FullName) ? request.FullName
+            : usernames.First();
         candidate.VerifiedEmails = discoveredEmails.DistinctBy(e => e.Email.ToLower()).ToList();
-        candidate.PhotoUrl = photos.FirstOrDefault();
-        candidate.ProbableLocation = GetMostCommon(locations) ?? phoneCountry ?? "";
+        candidate.PhotoUrl = displayedPhotos.FirstOrDefault() ?? enrichmentPhotos.FirstOrDefault();
+        candidate.ProbableLocation = GetMostCommon(displayedLocations) ?? GetMostCommon(enrichmentLocations) ?? phoneCountry ?? "";
         candidate.InferredAttributes = attributes.ToList();
         candidate.ProfessionalRole = InferProfessionalRole(attributes);
         candidate.CountryDistribution = _countryDetector.AnalyzeCountryProbability(request.Phone, [], request.FullName);
-        candidate.IdentitySignals = _identityLinker.AnalyzeLinks(allSources, request);
+        candidate.IdentitySignals = _identityLinker.AnalyzeLinks(candidate.Sources.ToList(), request);
 
         return candidate;
     }
@@ -806,7 +823,8 @@ public class CandidateAggregator
     }
 
     private string NormalizeUsername(string username) =>
-        username.ToLower().Replace("-", "").Replace("_", "").Replace(".", "").Replace(" ", "");
+        TextNormalization.StripDiacritics(username.ToLower())
+            .Replace("-", "").Replace("_", "").Replace(".", "").Replace(" ", "");
 
     private string? GetMostCommon(List<string> items) =>
         items.GroupBy(x => x).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();

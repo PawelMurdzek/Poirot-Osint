@@ -1,4 +1,5 @@
 using SherlockOsint.Shared.Models;
+using SherlockOsint.Api.Services;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -22,11 +23,18 @@ public class GitLabSearch
     public async Task<List<OsintNode>> SearchAsync(string fullName, string? email, CancellationToken ct = default)
     {
         var results = new List<OsintNode>();
-        
+
         if (!string.IsNullOrWhiteSpace(fullName))
         {
             var nameResults = await SearchUsersAsync(fullName, ct);
             results.AddRange(nameResults);
+
+            // Diacritic fallback — same rationale as GitHubSearch / OrcidLookup.
+            if (nameResults.Count == 0 && TextNormalization.HasDiacritics(fullName))
+            {
+                var asciiResults = await SearchUsersAsync(TextNormalization.StripDiacritics(fullName), ct);
+                results.AddRange(asciiResults);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(email))

@@ -24,6 +24,7 @@ Top-level hub for open-source intelligence: passive recon, social-media analysis
 | [[Commercial_Tools]] | Paid + vetted-access stack — Maltego (paid), i2, LexisNexis Accurint, TLO, Skopenow, ShadowDragon, threat-intel platforms |
 | [[OSS_Tools]] | Free / open-source — Maltego CE, SpiderFoot OSS, Recon-ng, Sherlock, Trufflehog, curated tool-launchers |
 | [[Social_Media_APIs]] | Extensive matrix: official APIs, scraping difficulty, account requirements, the locked-down landscape as of 2026, federated platforms (Mastodon, Bluesky, Lemmy) |
+| [[Public_Databases_APIs]] | Cross-cutting catalogue — academic/scholarly (ORCID, OpenAlex, Scholar, PubMed), sanctions/PEP/UBO (OpenSanctions, Aleph, ICIJ, OpenOwnership), patents (Lens, Espacenet), courts, maritime/aviation, leaks, gov open-data |
 | [[Sock_Puppet_Recipes]] | Concrete platform-by-platform sock-puppet provisioning — persona building, network/email/phone, ageing, per-platform recipes |
 
 ### Operating Systems

@@ -11,7 +11,17 @@ Plik utrzymywany przez agenta `poirot-builder`. Każda nowa pozycja pojawia się
 
 ## Tier A — działa out-of-the-box
 
-Wszystkie Tier A providery (Mastodon, Bluesky, Lemmy, HackerNews, 4chan archives, Wykop, DEV.to) **nie wymagają kluczy**. Nic nie musisz robić.
+Wszystkie Tier A providery (Mastodon, Bluesky, Lemmy, HackerNews, 4chan archives, Wykop, DEV.to, **ORCID, OpenAlex**) **nie wymagają kluczy**. Nic nie musisz robić.
+
+### ⬜ ORCID + OpenAlex (akademia — dodane 2026-04-25)
+
+Wpięte w Stage 1 przy każdym wyszukiwaniu z `fullName`. ORCID zwraca ORCID iD + pracodawców + edukację, OpenAlex zwraca profil autora + ostatnie afiliacje + works/cites counts. Idealne dla targetów akademickich (naukowcy / lekarze / inżynierowie z patentami) — wcześniej Poirot nie miał żadnego pokrycia tej klasy osób (test case 2026-04-25 — wyszukiwanie po samym `fullName` polskiego akademika zwracało wyłącznie squatter pages).
+
+**Endpointy bez klucza:**
+- `https://pub.orcid.org/v3.0/expanded-search/` (5 req/s, polite pool)
+- `https://api.openalex.org/authors?mailto=poirot-osint@example.org` (10 req/s)
+
+Jeśli kiedyś chcesz wyższe limity / commercial-grade, OpenAlex ma płatny plan, ORCID nie — i tak free tier wystarcza dla pojedynczych queries.
 
 ---
 
@@ -85,6 +95,44 @@ Każdy z tych providerów ma w `appsettings.json` placeholder. **Provider zadzia
 ### ⬜ Bilibili — bez klucza
 
 Bilibili nie wymaga klucza dla podstawowego user search. Provider działa od razu, ale **anti-bot Bilibili reaguje na masowe zapytania** — przy intensywnym użyciu może blokować IP. Provider używa już realnych nagłówków przeglądarki + Referer.
+
+---
+
+### ⏭️ Google Scholar (NIE zaimplementowane — wymaga płatnego SerpAPI)
+
+**Co dostaniesz:** profil autora, h-index, lista publikacji, citing papers (forward-citation pivots).
+
+**Status:** Google Scholar **nie ma oficjalnego API**, a samo Google agresywnie blokuje scrapery (CAPTCHA / IP ban). Jedyne czyste rozwiązania:
+- **SerpAPI** ([serpapi.com](https://serpapi.com/google-scholar-api)) — $75/mo za 5000 queries, dedykowany endpoint
+- Python `scholarly` lib — używa rotujących proxy, niestabilne, nieprzyjemne do utrzymania
+- ScraperAPI / ScrapingBee + manualny scraping — podobny koszt + bug-fixing
+
+**Rekomendacja:** **OpenAlex (już wpięty, free) jest funkcjonalnym substytutem** — pokrywa ~95% tego co Scholar (ten sam graf cytowań + autorzy + afiliacje), bez API key. Implementuj Scholar tylko jeśli OpenAlex zawodzi dla konkretnego targetu (głównie autorzy publikujący wyłącznie w mocno azjatyckich / specjalistycznych konferencjach które OpenAlex może pomijać).
+
+Jeśli chcesz dorzucić SerpAPI:
+1. Sign up https://serpapi.com — dostajesz API key
+2. Free tier: 100 queries/mo (mało)
+3. Wklej do `appsettings.json`: `"SerpApiKey": "..."` (placeholder by trzeba dodać)
+4. Provider do napisania osobno — daj znać jeśli zdecydujesz że potrzebujesz
+
+---
+
+### ⏭️ ResearchGate (NIE zaimplementowane — brak API, scraping zablokowany)
+
+**Co dostaniesz (ręcznie):** profil naukowca z afiliacjami, listą publikacji, kontaktem do autora, requestami do prac.
+
+**Status:** ResearchGate **nie ma żadnego publicznego API**. Strona jest za Cloudflare, robots.txt blokuje wszystkie boty, ToS zabrania scrapingu. Próba implementacji bez infrastruktury (residential proxies + headless browser + CAPTCHA solver) skończy się banem IP w 5 minut.
+
+**Rekomendacja:** **lookup ręczny przez przeglądarkę.** Format URL-a profilu to:
+- `https://www.researchgate.net/profile/{First}-{Last}`
+- Czasem `{First}-{Last}-2` jeśli istnieje wielu o tym imieniu/nazwisku
+
+Dla targetów akademickich **OpenAlex + ORCID (już wpięte) zazwyczaj dają tę samą informację** (pracodawca, lista publikacji, ORCID iD), więc ResearchGate jest "nice to have" a nie krytyczny.
+
+Jeśli kiedyś chcesz to obejść:
+- **Lens.org** ([lens.org](https://www.lens.org/)) — free for non-commercial, łączy patenty + papers, ma **prawdziwe API**
+- **Semantic Scholar** ([semanticscholar.org](https://www.semanticscholar.org/)) — free API z generous rate limits, 200M+ papers
+- Oba dają znacznie więcej "research footprint" niż ResearchGate, bez walki z anti-bot
 
 ---
 

@@ -66,6 +66,9 @@ builder.Services.AddSingleton<TelegramLookup>();
 builder.Services.AddSingleton<HackerRankLookup>();
 builder.Services.AddSingleton<FourProgrammersLookup>();
 builder.Services.AddSingleton<NumverifyLookup>();
+// Phase 10: Academic / scholarly identity (free, no key)
+builder.Services.AddSingleton<OrcidLookup>();
+builder.Services.AddSingleton<OpenAlexLookup>();
 
 // Register application services
 builder.Services.AddSingleton<ProfileAggregator>();

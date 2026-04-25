@@ -92,16 +92,23 @@ public class UsernameSearch
     }
 
     /// <summary>
-    /// Search for username across all platforms
+    /// Search for username across all platforms.
+    /// When <paramref name="expectedNameTokens"/> is supplied (normalised, lowercase,
+    /// diacritic-stripped tokens from the search query's full name), priority-1
+    /// platforms whose extracted display name + bio contain none of the tokens
+    /// are dropped — that's how we keep `kg` (display name "Greg Kruse") out of a
+    /// "Kacper Gradoń" candidate set without throwing away real matches that
+    /// happen to share a generic handle.
     /// </summary>
     public async IAsyncEnumerable<OsintNode> SearchAsync(
-        string username, 
+        string username,
+        IReadOnlyCollection<string>? expectedNameTokens = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(username))
             yield break;
 
-        _logger.LogInformation("Starting username enumeration for: {Username} across {PlatformCount} platforms", 
+        _logger.LogInformation("Starting username enumeration for: {Username} across {PlatformCount} platforms",
             username, Platforms.Count);
 
         // Check all platforms concurrently with rate limiting
@@ -111,7 +118,7 @@ public class UsernameSearch
             await _semaphore.WaitAsync(ct);
             try
             {
-                var result = await CheckPlatformAsync(username, platform, ct);
+                var result = await CheckPlatformAsync(username, platform, expectedNameTokens, ct);
                 if (result != null)
                 {
                     results.Add(result);
@@ -293,7 +300,11 @@ public class UsernameSearch
         return Math.Min(confidence, maxConfidence);
     }
 
-    private async Task<OsintNode?> CheckPlatformAsync(string username, PlatformCheck platform, CancellationToken ct)
+    private async Task<OsintNode?> CheckPlatformAsync(
+        string username,
+        PlatformCheck platform,
+        IReadOnlyCollection<string>? expectedNameTokens,
+        CancellationToken ct)
     {
         try
         {
@@ -334,6 +345,32 @@ public class UsernameSearch
                     if (string.IsNullOrEmpty(location) && !string.IsNullOrEmpty(verification.Location)) location = verification.Location;
                     verificationConfidence = verification.Confidence;
                     verificationEvidence = verification.Evidence;
+
+                    // Token-match gate: for priority-1 platforms (GitHub, X, Reddit,
+                    // GitLab, LinkedIn, Instagram, TikTok), require that at least one
+                    // expected name token appear in the extracted display name or bio.
+                    // Skipped when no tokens were supplied, all tokens are too short
+                    // to be discriminative (<3 chars), or no profile text was
+                    // extracted (auth-walled pages — we have no evidence either way).
+                    if (exists
+                        && platform.Priority == 1
+                        && expectedNameTokens != null
+                        && expectedNameTokens.Count > 0)
+                    {
+                        var hasUsableTokens = expectedNameTokens.Any(t => t.Length >= 3);
+                        var probe = StripDiacritics(((displayName ?? "") + " " + (bio ?? "")).ToLowerInvariant()).Trim();
+                        if (hasUsableTokens && probe.Length >= 5)
+                        {
+                            var anyMatch = expectedNameTokens.Any(t => t.Length >= 3 && probe.Contains(t));
+                            if (!anyMatch)
+                            {
+                                _logger.LogInformation(
+                                    "Token-match gate: dropping {Platform}/{Username} — display/bio matches none of [{Tokens}]",
+                                    platform.Name, username, string.Join(",", expectedNameTokens));
+                                exists = false;
+                            }
+                        }
+                    }
                 }
             }
             // Some platforms return 200 even for non-existent users, so we check content
@@ -750,11 +787,29 @@ public class UsernameSearch
     }
 
     private record PlatformCheck(
-        string Name, 
-        string UrlTemplate, 
-        string? Domain, 
-        int Priority, 
+        string Name,
+        string UrlTemplate,
+        string? Domain,
+        int Priority,
         string Icon);
+
+    /// <summary>
+    /// Lowercase-friendly diacritic stripper. "Gradoń" → "gradon", "Łukasz" → "lukasz".
+    /// Used by the token-match gate so a query for "Kacper Gradoń" still matches a
+    /// profile whose display name uses the bare ASCII form.
+    /// </summary>
+    internal static string StripDiacritics(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return "";
+        var normalised = value.Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder(normalised.Length);
+        foreach (var ch in normalised)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch) != System.Globalization.UnicodeCategory.NonSpacingMark)
+                sb.Append(ch);
+        }
+        return sb.ToString().Replace("ł", "l").Replace("Ł", "l");
+    }
 }
 
 /// <summary>
