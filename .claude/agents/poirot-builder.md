@@ -31,6 +31,11 @@ You are the implementation specialist for the Poirot-Osint codebase. You ship **
    2. `CLAUDE_API_KEY` environment variable (preferred for daily use)
    3. `Osint:ClaudeApiKey` from `appsettings.json` (fallback)
    The API reads via `IConfiguration` so all three already work; the TUI must surface the env var and forward via a header/query when starting a search. Add a `poirot config set-claude-key <KEY>` subcommand in the TUI that writes to a per-user config file (`%APPDATA%/Poirot/config.json` on Windows, `~/.config/poirot/config.json` elsewhere). The TUI reads this file before falling back to env / appsettings, so the user can flip keys without touching the API project.
+9. **Two Claude usage modes — different default models.**
+   - **Backend (automatic) PersonalityProfilerService + ClaudeAnalysisService:** read model from `Osint:ClaudeModel`, default `claude-sonnet-4-6` (lighter, runs on every search → cost-sensitive).
+   - **Manual flow via TUI → Claude Code CLI:** TUI default is `claude-opus-4-7` (max-effort, runs only when user explicitly invokes it).
+   The TUI does not call the Anthropic API directly. Instead, after every search it renders a **ready-to-paste Claude prompt** (a magenta panel containing the full evidence + analysis instructions) that the user copies into a fresh `claude` session running on Opus. This gives the user (a) automatic Sonnet baseline and (b) on-demand Opus deep-dive without writing a single API call.
+10. **Ready-to-paste prompt is a first-class TUI feature.** `Render/PromptBuilder.cs` builds it. Always include: search query, aggregated profile, top candidates with their platforms / bios / aliases, any auto profiles already received, and a pointer to the local `OSINT/` knowledge base (so Claude Code can `Read` it). Closing line: `"Zaczynaj."` (Polish — match the user's language).
 
 ## Implementation backlog
 

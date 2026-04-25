@@ -65,7 +65,13 @@ public class CandidateAggregator
         // STEP 1: Group all platform nodes by normalised username
         var usernameGroups = new Dictionary<string, List<(OsintNode Node, SourceEvidence Evidence)>>(StringComparer.OrdinalIgnoreCase);
         var emailToUsernames = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var phoneToUsernames = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var usernameToDisplayName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var seenUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Seed phone bucket with the search-input phone so any candidate associated
+        // with this phone (e.g. via FullContact reverse-lookup) clusters together.
+        var inputPhoneNormalised = NormalisePhone(request.Phone);
 
         foreach (var node in results)
         {
@@ -93,12 +99,43 @@ public class CandidateAggregator
                     emailToUsernames[lowerEmail] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 emailToUsernames[lowerEmail].Add(normalizedUsername);
             }
+
+            if (evidence.ExtractedData.TryGetValue("phone", out var phone) && !string.IsNullOrEmpty(phone))
+            {
+                var p = NormalisePhone(phone);
+                if (!string.IsNullOrEmpty(p))
+                {
+                    if (!phoneToUsernames.ContainsKey(p))
+                        phoneToUsernames[p] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    phoneToUsernames[p].Add(normalizedUsername);
+                }
+            }
+
+            // Also link the input phone to every candidate it touches via FullContact
+            // (FullContact returns the phone in the parent node value).
+            if (!string.IsNullOrEmpty(inputPhoneNormalised) && evidence.Platform.Contains("FullContact", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!phoneToUsernames.ContainsKey(inputPhoneNormalised))
+                    phoneToUsernames[inputPhoneNormalised] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                phoneToUsernames[inputPhoneNormalised].Add(normalizedUsername);
+            }
+
+            // Track display name per username for similarity-based merging
+            var displayName = evidence.ExtractedData.GetValueOrDefault("name")
+                ?? evidence.ExtractedData.GetValueOrDefault("displayname")
+                ?? evidence.DisplayName;
+            if (!string.IsNullOrWhiteSpace(displayName) && !usernameToDisplayName.ContainsKey(normalizedUsername))
+                usernameToDisplayName[normalizedUsername] = displayName;
         }
 
         _logger.LogInformation("Found {Count} unique usernames", usernameGroups.Count);
 
-        // STEP 2: Detect merges based on shared emails
-        var mergeGroups = DetectMergeGroups(usernameGroups.Keys.ToList(), emailToUsernames);
+        // STEP 2: Detect merges — shared email > shared phone > similar display name
+        var mergeGroups = DetectMergeGroups(
+            usernameGroups.Keys.ToList(),
+            emailToUsernames,
+            phoneToUsernames,
+            usernameToDisplayName);
 
         // STEP 3: Build candidate objects (sources + data, no scoring yet)
         var candidates = new List<TargetCandidate>();
@@ -191,11 +228,14 @@ public class CandidateAggregator
 
     private List<MergeGroup> DetectMergeGroups(
         List<string> usernames,
-        Dictionary<string, HashSet<string>> emailToUsernames)
+        Dictionary<string, HashSet<string>> emailToUsernames,
+        Dictionary<string, HashSet<string>>? phoneToUsernames = null,
+        Dictionary<string, string>? usernameToDisplayName = null)
     {
         var groups = new List<MergeGroup>();
         var assigned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // Pass 1 — merge by shared email (strongest signal)
         foreach (var email in emailToUsernames.Keys)
         {
             var shared = emailToUsernames[email].Where(u => usernames.Contains(u)).ToList();
@@ -208,6 +248,47 @@ public class CandidateAggregator
             foreach (var u in unassigned) assigned.Add(u);
         }
 
+        // Pass 2 — merge by shared phone (strong)
+        if (phoneToUsernames != null)
+        {
+            foreach (var phone in phoneToUsernames.Keys)
+            {
+                var shared = phoneToUsernames[phone].Where(u => usernames.Contains(u) && !assigned.Contains(u)).ToList();
+                if (shared.Count <= 1) continue;
+
+                groups.Add(new MergeGroup { Usernames = shared, MergeReason = $"Same phone: {phone}" });
+                foreach (var u in shared) assigned.Add(u);
+            }
+        }
+
+        // Pass 3 — merge by display-name similarity (weakest, but catches "Pawel Murdzek" vs "Paweł Murdzek")
+        if (usernameToDisplayName != null && usernameToDisplayName.Count > 1)
+        {
+            var pending = usernames.Where(u => !assigned.Contains(u)).ToList();
+            for (int i = 0; i < pending.Count; i++)
+            {
+                if (assigned.Contains(pending[i])) continue;
+                if (!usernameToDisplayName.TryGetValue(pending[i], out var nameI) || string.IsNullOrWhiteSpace(nameI)) continue;
+
+                var clusterMembers = new List<string> { pending[i] };
+                for (int j = i + 1; j < pending.Count; j++)
+                {
+                    if (assigned.Contains(pending[j])) continue;
+                    if (!usernameToDisplayName.TryGetValue(pending[j], out var nameJ) || string.IsNullOrWhiteSpace(nameJ)) continue;
+
+                    if (NamesAreSimilar(nameI, nameJ))
+                        clusterMembers.Add(pending[j]);
+                }
+
+                if (clusterMembers.Count > 1)
+                {
+                    groups.Add(new MergeGroup { Usernames = clusterMembers, MergeReason = $"Similar display names: \"{nameI}\"" });
+                    foreach (var u in clusterMembers) assigned.Add(u);
+                }
+            }
+        }
+
+        // Pass 4 — singletons
         foreach (var username in usernames)
         {
             if (!assigned.Contains(username))
@@ -215,6 +296,65 @@ public class CandidateAggregator
         }
 
         return groups;
+    }
+
+    /// <summary>
+    /// Two display names are "similar" if their normalised (diacritic-stripped, lowercase)
+    /// forms have Levenshtein distance ≤ 2 over the longer string. Defensive: at least
+    /// one of them must contain a space (i.e. plausibly first+last) to avoid clustering
+    /// generic single-word handles.
+    /// </summary>
+    private static bool NamesAreSimilar(string a, string b)
+    {
+        var na = NormaliseForCompare(a);
+        var nb = NormaliseForCompare(b);
+        if (string.IsNullOrEmpty(na) || string.IsNullOrEmpty(nb)) return false;
+        if (!na.Contains(' ') && !nb.Contains(' ')) return false; // require at least one to look like full name
+        if (na == nb) return true;
+
+        // Cheap shortcut: identical token sets in any order
+        var ta = na.Split(' ', StringSplitOptions.RemoveEmptyEntries).OrderBy(x => x);
+        var tb = nb.Split(' ', StringSplitOptions.RemoveEmptyEntries).OrderBy(x => x);
+        if (ta.SequenceEqual(tb)) return true;
+
+        // Levenshtein with cap on the longer string
+        var dist = Levenshtein(na, nb);
+        return dist <= 2;
+    }
+
+    private static string NormaliseForCompare(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        var normalised = s.Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder(normalised.Length);
+        foreach (var ch in normalised)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch) != System.Globalization.UnicodeCategory.NonSpacingMark)
+                sb.Append(ch);
+        }
+        return sb.ToString().ToLowerInvariant()
+            .Replace("ł", "l").Replace("Ł", "l")
+            .Trim();
+    }
+
+    private static int Levenshtein(string a, string b)
+    {
+        if (a.Length == 0) return b.Length;
+        if (b.Length == 0) return a.Length;
+        var prev = new int[b.Length + 1];
+        var curr = new int[b.Length + 1];
+        for (int j = 0; j <= b.Length; j++) prev[j] = j;
+        for (int i = 1; i <= a.Length; i++)
+        {
+            curr[0] = i;
+            for (int j = 1; j <= b.Length; j++)
+            {
+                var cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                curr[j] = Math.Min(Math.Min(curr[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+            }
+            (prev, curr) = (curr, prev);
+        }
+        return prev[b.Length];
     }
 
     private sealed class MergeGroup
@@ -582,4 +722,19 @@ public class CandidateAggregator
 
     private string? GetMostCommon(List<string> items) =>
         items.GroupBy(x => x).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
+
+    /// <summary>
+    /// Normalise a phone number to digits-only with optional leading "+". Strips
+    /// spaces, dashes, parens, "ext" / "x" extensions. Returns "" for clearly-invalid.
+    /// </summary>
+    private static string NormalisePhone(string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone)) return "";
+        var trimmed = phone.Trim();
+        var prefix = trimmed.StartsWith("+") ? "+" : "";
+        var digits = new string(trimmed.Where(char.IsDigit).ToArray());
+        // Drop short codes / extensions
+        if (digits.Length < 7) return "";
+        return prefix + digits;
+    }
 }

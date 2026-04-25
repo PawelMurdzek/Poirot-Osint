@@ -62,6 +62,10 @@ builder.Services.AddSingleton<TwitchLookup>();
 builder.Services.AddSingleton<BilibiliLookup>();
 builder.Services.AddSingleton<VkLookup>();
 builder.Services.AddSingleton<TelegramLookup>();
+// Phase 9: Tier D — niche / regional / phone reverse-lookup
+builder.Services.AddSingleton<HackerRankLookup>();
+builder.Services.AddSingleton<FourProgrammersLookup>();
+builder.Services.AddSingleton<NumverifyLookup>();
 
 // Register application services
 builder.Services.AddSingleton<ProfileAggregator>();

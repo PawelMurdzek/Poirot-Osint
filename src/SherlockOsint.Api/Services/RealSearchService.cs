@@ -41,6 +41,9 @@ public class RealSearchService : IRealSearchService
     private readonly BilibiliLookup _bilibiliLookup;
     private readonly VkLookup _vkLookup;
     private readonly TelegramLookup _telegramLookup;
+    private readonly HackerRankLookup _hackerRankLookup;
+    private readonly FourProgrammersLookup _fourProgrammersLookup;
+    private readonly NumverifyLookup _numverifyLookup;
     private readonly ILogger<RealSearchService> _logger;
 
     public RealSearchService(
@@ -71,6 +74,9 @@ public class RealSearchService : IRealSearchService
         BilibiliLookup bilibiliLookup,
         VkLookup vkLookup,
         TelegramLookup telegramLookup,
+        HackerRankLookup hackerRankLookup,
+        FourProgrammersLookup fourProgrammersLookup,
+        NumverifyLookup numverifyLookup,
         ILogger<RealSearchService> logger)
     {
         _gravatarLookup = gravatarLookup;
@@ -100,6 +106,9 @@ public class RealSearchService : IRealSearchService
         _bilibiliLookup = bilibiliLookup;
         _vkLookup = vkLookup;
         _telegramLookup = telegramLookup;
+        _hackerRankLookup = hackerRankLookup;
+        _fourProgrammersLookup = fourProgrammersLookup;
+        _numverifyLookup = numverifyLookup;
         _logger = logger;
     }
 
@@ -121,6 +130,21 @@ public class RealSearchService : IRealSearchService
 
         if (!string.IsNullOrEmpty(request.Nickname)) discoveredHandles.Add(request.Nickname);
         if (!string.IsNullOrEmpty(request.Email)) discoveredEmails.Add(request.Email);
+
+        // Seed handles from email local part and / or full name when no nickname
+        // was supplied so Stage 2 has something to fan out on. Always seed the
+        // permutator-derived candidates too, even if a nickname *was* supplied —
+        // it's effectively free and catches first-initial / last-only patterns.
+        if (!string.IsNullOrEmpty(request.Email))
+        {
+            foreach (var h in _nicknamePermutator.EmailToHandleCandidates(request.Email, request.FullName))
+                discoveredHandles.Add(h);
+        }
+        if (!string.IsNullOrEmpty(request.FullName))
+        {
+            foreach (var h in _nicknamePermutator.FullNameToHandleCandidates(request.FullName))
+                discoveredHandles.Add(h);
+        }
 
         // Helper to deduplicate and stream
         void AddResult(OsintNode node)
@@ -164,11 +188,14 @@ public class RealSearchService : IRealSearchService
 
                 if (!string.IsNullOrEmpty(request.Phone))
                 {
-                    enrichmentTasks.Add(_phoneValidator.ValidateAsync(request.Phone!, ct).ContinueWith(t => 
+                    enrichmentTasks.Add(_phoneValidator.ValidateAsync(request.Phone!, ct).ContinueWith(t =>
                         { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }));
 
-                    enrichmentTasks.Add(_fullContactLookup.EnrichPhoneAsync(request.Phone!, ct).ContinueWith(t => 
+                    enrichmentTasks.Add(_fullContactLookup.EnrichPhoneAsync(request.Phone!, ct).ContinueWith(t =>
                         { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) { AddResult(n); foreach(var h in ExtractHandlesFromNode(n)) discoveredHandles.Add(h); } }));
+
+                    enrichmentTasks.Add(_numverifyLookup.SearchAsync(request.Phone!, ct).ContinueWith(t =>
+                        { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }));
                 }
 
                 if (!string.IsNullOrEmpty(request.Email) || !string.IsNullOrEmpty(request.FullName))
@@ -226,7 +253,17 @@ public class RealSearchService : IRealSearchService
                         _vkLookup.SearchAsync(nick, ct).ContinueWith(t =>
                             { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
                         _telegramLookup.SearchAsync(nick, ct).ContinueWith(t =>
-                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct)
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
+                        _hackerRankLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) { AddResult(n); foreach (var h in ExtractHandlesFromNode(n)) discoveredHandles.Add(h); } }, ct),
+                        _fourProgrammersLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
+                        _stackOverflowDiscovery.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var p in t.Result) AddResult(VerifiedProfileToNode(p)); }, ct),
+                        _redditDiscovery.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var p in t.Result) AddResult(VerifiedProfileToNode(p)); }, ct),
+                        _youtubeDiscovery.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var p in t.Result) AddResult(VerifiedProfileToNode(p)); }, ct)
                     };
                     await Task.WhenAll(perHandleTasks);
                 }
@@ -299,6 +336,30 @@ public class RealSearchService : IRealSearchService
             }
         }
         return null;
+    }
+
+    private OsintNode VerifiedProfileToNode(VerifiedProfile p)
+    {
+        var children = new List<OsintNode>();
+        if (!string.IsNullOrEmpty(p.Username))
+            children.Add(new OsintNode { Id = Guid.NewGuid().ToString(), Label = "Username", Value = p.Username, Depth = 2 });
+        if (!string.IsNullOrEmpty(p.DisplayName))
+            children.Add(new OsintNode { Id = Guid.NewGuid().ToString(), Label = "Display Name", Value = p.DisplayName, Depth = 2 });
+        if (!string.IsNullOrEmpty(p.Bio))
+            children.Add(new OsintNode { Id = Guid.NewGuid().ToString(), Label = "📝 Bio", Value = p.Bio, Depth = 2 });
+        if (!string.IsNullOrEmpty(p.Location))
+            children.Add(new OsintNode { Id = Guid.NewGuid().ToString(), Label = "Location", Value = p.Location, Depth = 2 });
+        foreach (var ev in p.Evidence)
+            children.Add(new OsintNode { Id = Guid.NewGuid().ToString(), Label = "Evidence", Value = ev, Depth = 2 });
+
+        return new OsintNode
+        {
+            Id = Guid.NewGuid().ToString(),
+            Label = $"{p.Platform} User",
+            Value = p.Url,
+            Depth = 1,
+            Children = children
+        };
     }
 
     private IEnumerable<string> ExtractEmailsFromNode(OsintNode node)
