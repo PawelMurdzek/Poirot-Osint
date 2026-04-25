@@ -135,6 +135,10 @@ public class RealSearchService : IRealSearchService
         // was supplied so Stage 2 has something to fan out on. Always seed the
         // permutator-derived candidates too, even if a nickname *was* supplied —
         // it's effectively free and catches first-initial / last-only patterns.
+        // We deliberately do NOT pre-filter weak seeds (e.g. bare-first 'pawel',
+        // bare-last 'murdzek'): the IsFromUserInput flag on TargetCandidate plus
+        // the /sessions Claude memory pass let the ranker downrank speculative
+        // permutations without us throwing away potentially valid handles upfront.
         if (!string.IsNullOrEmpty(request.Email))
         {
             foreach (var h in _nicknamePermutator.EmailToHandleCandidates(request.Email, request.FullName))

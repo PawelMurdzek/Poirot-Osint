@@ -34,6 +34,8 @@ public class SearchOrchestrator : BackgroundService, ISearchOrchestrator
     private readonly ProfileAggregator _profileAggregator;
     private readonly CandidateAggregator _candidateAggregator;
     private readonly PersonalityProfilerService _personalityProfiler;
+    private readonly SessionMemoryService _sessionMemory;
+    private readonly ClaudeAnalysisService _claudeAnalysis;
     private readonly ILogger<SearchOrchestrator> _logger;
 
     public SearchOrchestrator(
@@ -42,6 +44,8 @@ public class SearchOrchestrator : BackgroundService, ISearchOrchestrator
         ProfileAggregator profileAggregator,
         CandidateAggregator candidateAggregator,
         PersonalityProfilerService personalityProfiler,
+        SessionMemoryService sessionMemory,
+        ClaudeAnalysisService claudeAnalysis,
         ILogger<SearchOrchestrator> logger)
     {
         _hubContext = hubContext;
@@ -49,6 +53,8 @@ public class SearchOrchestrator : BackgroundService, ISearchOrchestrator
         _profileAggregator = profileAggregator;
         _candidateAggregator = candidateAggregator;
         _personalityProfiler = personalityProfiler;
+        _sessionMemory = sessionMemory;
+        _claudeAnalysis = claudeAnalysis;
         _logger = logger;
         _searchQueue = Channel.CreateUnbounded<(SearchRequest, string)>();
         _activeSearches = new ConcurrentDictionary<string, CancellationTokenSource>();
@@ -118,7 +124,43 @@ public class SearchOrchestrator : BackgroundService, ISearchOrchestrator
             _logger.LogInformation("Sent {CandidateCount} candidates to {ConnectionId}",
                 candidates.Count, connectionId);
 
-            // Personality profiler — only the TOP-3 by probability, in parallel
+            // Persist top-10 candidates to /sessions and surface a Claude CLI
+            // command. This is the "memory" mechanism that replaces the old
+            // arbitrary-numbers fallback when no API key is configured — and
+            // it also runs when Claude *is* configured so the user has a log.
+            try
+            {
+                var record = await _sessionMemory.PersistAsync(request, candidates, _claudeAnalysis.IsConfigured, cts.Token);
+                await _hubContext.Clients.Client(connectionId).SendAsync(
+                    "ReceiveSessionMemory",
+                    new
+                    {
+                        folderPath = record.FolderPath,
+                        jsonPath = record.JsonPath,
+                        markdownPath = record.MarkdownPath,
+                        claudeCommand = record.ClaudeCommand,
+                        promptHint = record.ClaudePromptHint,
+                        claudeApiConfigured = _claudeAnalysis.IsConfigured
+                    },
+                    cts.Token);
+                _logger.LogInformation("Session memory written to {Path} for {ConnectionId}",
+                    record.JsonPath, connectionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to persist session memory for {ConnectionId}", connectionId);
+            }
+
+            // Personality profiler — only the TOP-3 by probability, in parallel.
+            // Skip when Claude isn't configured: without the API key the profiler
+            // returns null and we'd just be wasting cycles on a no-op.
+            if (!_claudeAnalysis.IsConfigured)
+            {
+                _logger.LogInformation("Skipping personality profiler — Claude API key not configured");
+                await _hubContext.Clients.Client(connectionId).SendAsync("SearchCompleted", "Search completed.", cts.Token);
+                return;
+            }
+
             var top3 = candidates.Take(3).ToList();
             if (top3.Count > 0)
             {

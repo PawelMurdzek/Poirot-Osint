@@ -32,6 +32,14 @@ public class ClaudeAnalysisService
     }
 
     /// <summary>
+    /// True iff an Anthropic API key is configured (Osint:ClaudeApiKey).
+    /// Consumers use this to decide whether to fall back to /sessions memory
+    /// + CLI command instead of expecting AI scoring.
+    /// </summary>
+    public bool IsConfigured =>
+        !string.IsNullOrWhiteSpace(_config["Osint:ClaudeApiKey"]);
+
+    /// <summary>
     /// Sends all collected candidates to Claude and receives probability assessments.
     /// Returns empty list if API key is missing or request fails.
     /// </summary>

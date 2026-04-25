@@ -70,10 +70,11 @@ Mobile SearchPage
       → RealSearchService (two-stage pipeline, see below)
         → Each yielded OsintNode → ReceiveNode signal (streamed live)
       → After streaming completes:
-        → CandidateAggregator.BuildCandidatesAsync → ClaudeAnalysisService (LLM scoring)
+        → CandidateAggregator.BuildCandidatesAsync → ClaudeAnalysisService (LLM scoring, optional)
         → ProfileAggregator.Aggregate
           → ReceiveCandidates + ReceiveProfile signals
-            → Mobile ResultsPage displays tree + identity candidates
+        → SessionMemoryService.PersistAsync → ReceiveSessionMemory signal
+          → Mobile ResultsPage displays tree + identity candidates + claude CLI command
 ```
 
 ### RealSearchService pipeline (important)
@@ -89,13 +90,14 @@ Several providers exist in `Services/OsintProviders/` (e.g. `DomainWhoisLookup`,
 
 ### Key Services (API)
 
-- **`OsintHub`** — SignalR hub; receives `StartSearch`/`CancelSearch`, emits `ReceiveNode`, `ReceiveProfile`, `ReceiveCandidates`, `SearchStarted`, `SearchCompleted`, `SearchError`
-- **`SearchOrchestrator`** — `IHostedService` managing `Channel<SearchRequest>`; one `CancellationTokenSource` per connection ID
+- **`OsintHub`** — SignalR hub; receives `StartSearch`/`CancelSearch`, emits `ReceiveNode`, `ReceiveProfile`, `ReceiveCandidates`, `ReceiveSessionMemory`, `ReceivePersonalityProfile`, `SearchStarted`, `SearchCompleted`, `SearchCancelled`, `SearchError`
+- **`SearchOrchestrator`** — `IHostedService` managing `Channel<SearchRequest>`; one `CancellationTokenSource` per connection ID. Skips the personality profiler entirely when `Osint:ClaudeApiKey` is missing (it would no-op anyway)
 - **`RealSearchService`** — see pipeline above; returns `IAsyncEnumerable<OsintNode>` backed by an unbounded channel
-- **`CandidateAggregator`** — `BuildCandidatesAsync` is **async**; groups platform nodes by normalized username, merges via `IdentityLinker`, then delegates probability scoring to `ClaudeAnalysisService`
-- **`ClaudeAnalysisService`** — Calls Claude API (`claude-sonnet-4-6` via `https://api.anthropic.com/v1/messages`) to score every candidate. Builds a structured prompt listing the search query and each candidate's platforms/aliases/emails, then parses a JSON-array response into `CandidateAssessment` objects (probability, consistency analysis, uncertainty notes, professional role, activity summary, confidence interval). **Skips silently if `Osint:ClaudeApiKey` is not configured** — replaces the older hardcoded probability scoring
+- **`CandidateAggregator`** — `BuildCandidatesAsync` is **async**; groups platform nodes by normalized username, merges via `IdentityLinker`, flags each candidate's `IsFromUserInput` (true when primary username/alias matches the typed nickname or email local-part, OR when merged via shared email/phone), then delegates probability scoring to `ClaudeAnalysisService`. **No arbitrary fallback scoring** — when Claude is unavailable, `ProbabilityScore=0` and the consistency/uncertainty fields point the user at the `/sessions` snapshot. Candidates get re-sorted by `IsFromUserInput` first when no AI scoring is available
+- **`ClaudeAnalysisService`** — Calls Claude API (`claude-sonnet-4-6` via `https://api.anthropic.com/v1/messages`) to score every candidate. Builds a structured prompt listing the search query and each candidate's platforms/aliases/emails, then parses a JSON-array response into `CandidateAssessment` objects (probability, consistency analysis, uncertainty notes, professional role, activity summary, confidence interval). **Skips silently if `Osint:ClaudeApiKey` is not configured.** Exposes `IsConfigured` so callers can branch
+- **`SessionMemoryService`** — Persists every search to `<repo-root>/sessions/<timestamp>-<slug>.{json,md}`. The JSON is the authoritative source (full candidate set when no AI key, top-10 digest when AI scored); the MD is always a top-10 human-readable digest that explicitly tells Claude the JSON is the source of truth. The orchestrator emits `ReceiveSessionMemory` with `{folderPath, jsonPath, markdownPath, claudeCommand, claudeApiConfigured}` — `claudeCommand` is a ready-to-paste `claude -p "..."` invocation that ranks candidates from the JSON and proposes follow-up next-step searches. Path resolution walks up from the binary looking for `.git`/`SherlockOsint.sln`; override with `Osint:SessionsPath`
 - **`ProfileAggregator`** — Collapses all nodes into a single `DigitalProfile` with confidence score
-- **`NicknamePermutator`** — Generates handle variations from the seed nickname + full name (used in Stage 2)
+- **`NicknamePermutator`** — Generates handle variations from the seed nickname + full name (used in Stage 2). Lives in `Services/`, not `Services/OsintProviders/`
 
 ### OSINT Providers (`Services/OsintProviders/`)
 
@@ -121,7 +123,7 @@ Uses **CommunityToolkit.Mvvm** with source generators:
 | `SearchRequest` | Input: email, phone, nickname, fullName, connectionId |
 | `OsintNode` | Single result tree node with label, value, children, type, metadata |
 | `DigitalProfile` | Aggregated profile: name, email, photo, platforms, confidence score |
-| `TargetCandidate` | Identity candidate with probability score and source evidence |
+| `TargetCandidate` | Identity candidate with probability score, source evidence, and `IsFromUserInput` flag |
 | `IdentitySignal` | Cross-platform signal used by `IdentityLinker` for merging candidates |
 
 `OsintNode.Icon` is a computed property returning an emoji based on the node label — it is not set by providers.
@@ -130,7 +132,11 @@ Uses **CommunityToolkit.Mvvm** with source generators:
 
 **API keys** are optional and configured via environment variables or `appsettings.json` under the `Osint:` section:
 ```
-Osint__ClaudeApiKey       # Drives candidate scoring; without it candidates have no AI assessment
+Osint__ClaudeApiKey       # Drives candidate scoring + personality profiler. Without it,
+                          # candidates get ProbabilityScore=0 and a CLI command pointing
+                          # at /sessions is emitted instead of arbitrary numbers.
+Osint__ClaudeModel        # Defaults to "claude-sonnet-4-6"
+Osint__SessionsPath       # Override for the session-memory output folder. Default: <repo>/sessions
 Osint__HunterApiKey
 Osint__HibpApiKey
 Osint__ClearbitApiKey
@@ -150,6 +156,7 @@ All projects target **net10.0** (Preview). Ensure the .NET 10 SDK is installed b
 ## Other documentation in this repo
 
 Additional Markdown files exist at the repo root and may have useful context (treat as snapshots — verify against current code before relying on details):
-- `README.md` — high-level overview, tech stack table, author info
+- `README.md` — high-level overview, configuration table, signal list, author info
 - `DEPLOYMENT_GUIDE.md` — cloud/Docker deployment notes
-- `FINAL_DOCUMENTATION.md`, `PROJECT_DOCUMENTATION.md` — older long-form docs
+- `sherlock_not_poirot.md` — full Sherlock `data.json` site catalog (478 entries) cross-referenced against current Poirot coverage, plus an implementation brief for closing the gap
+- `USER_TODO.md` — open quality issues with the candidate pipeline (false-positive permutator handles, `ProfileVerifier` not yet wired into Stage 2)

@@ -108,6 +108,14 @@ public class TargetCandidate
     /// Brief activity summary across platforms
     /// </summary>
     public string? ActivitySummary { get; set; }
+
+    /// <summary>
+    /// True if PrimaryUsername (or any alias) matches a value the user typed in
+    /// (nickname, email local-part). False if the candidate's primary username only
+    /// came out of the NicknamePermutator — those need a corroborating signal
+    /// before they should be treated as real candidates.
+    /// </summary>
+    public bool IsFromUserInput { get; set; }
 }
 
 /// <summary>

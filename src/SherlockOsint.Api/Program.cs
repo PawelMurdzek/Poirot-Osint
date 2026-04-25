@@ -70,6 +70,7 @@ builder.Services.AddSingleton<NumverifyLookup>();
 // Register application services
 builder.Services.AddSingleton<ProfileAggregator>();
 builder.Services.AddSingleton<ClaudeAnalysisService>();
+builder.Services.AddSingleton<SessionMemoryService>();
 builder.Services.AddSingleton<CandidateAggregator>();
 builder.Services.AddSingleton<IRealSearchService, RealSearchService>();
 builder.Services.AddSingleton<ISearchOrchestrator, SearchOrchestrator>();

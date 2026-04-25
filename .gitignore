@@ -56,3 +56,7 @@ docker-compose.override.yml
 # Secrets — never commit API keys
 appsettings.Development.json
 appsettings.Production.json
+
+# OSINT session memory (per-search candidate snapshots used as Claude context)
+sessions/
+

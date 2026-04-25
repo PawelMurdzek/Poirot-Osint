@@ -158,19 +158,66 @@ public class CandidateAggregator
             }
         }
 
-        // STEP 4: Call Claude to assess all candidates at once
+        // STEP 4: Mark which candidates come from user-supplied input vs the
+        // permutator. The flag travels with the candidate into the /sessions
+        // memory file so Claude (live or via CLI) can downrank speculative ones.
+        FlagUserInputCandidates(request, candidates);
+
+        // STEP 5: Call Claude to assess all candidates at once. When Claude is
+        // not configured we deliberately do NOT apply any arbitrary fallback —
+        // the SearchOrchestrator persists candidates to /sessions and emits a
+        // CLI command pointing the user's local Claude CLI at that folder.
         var assessments = await _claudeAnalysis.AnalyzeCandidatesAsync(request, candidates, ct);
 
         if (assessments.Count > 0)
+        {
             ApplyClaudeAssessments(candidates, assessments);
+            candidates = [.. candidates.OrderByDescending(c => c.ProbabilityScore)];
+        }
         else
-            ApplyFallbackScoring(candidates);
+        {
+            ApplyNoAiAnnotation(candidates);
+            // Order: user-input first, then by source count + high-priority sources
+            candidates = [.. candidates
+                .OrderByDescending(c => c.IsFromUserInput)
+                .ThenByDescending(c => c.Sources.Count(s => s.PlatformPriority <= 2))
+                .ThenByDescending(c => c.Sources.Count)];
+        }
 
-        candidates = [.. candidates.OrderByDescending(c => c.ProbabilityScore)];
-
-        _logger.LogInformation("Built {CandidateCount} candidates from {UsernameCount} usernames",
-            candidates.Count, usernameGroups.Count);
+        _logger.LogInformation("Built {CandidateCount} candidates from {UsernameCount} usernames (AI={AiUsed})",
+            candidates.Count, usernameGroups.Count, assessments.Count > 0);
         return candidates;
+    }
+
+    /// <summary>
+    /// True when the candidate's PrimaryUsername (or any alias) matches a token
+    /// the user typed in: the explicit nickname or the email local-part.
+    /// Also true when the candidate has a corroborating signal beyond mere
+    /// username collision — shared email or shared phone with the input.
+    /// </summary>
+    private void FlagUserInputCandidates(SearchRequest request, List<TargetCandidate> candidates)
+    {
+        var inputTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(request.Nickname))
+            inputTokens.Add(NormalizeUsername(request.Nickname!));
+        if (!string.IsNullOrWhiteSpace(request.Email))
+        {
+            var at = request.Email!.IndexOf('@');
+            if (at > 0) inputTokens.Add(NormalizeUsername(request.Email![..at]));
+        }
+
+        foreach (var candidate in candidates)
+        {
+            var primary = NormalizeUsername(candidate.PrimaryUsername ?? "");
+            var aliasMatch = candidate.KnownAliases.Any(a => inputTokens.Contains(NormalizeUsername(a)));
+            var emailMatch = !string.IsNullOrWhiteSpace(request.Email)
+                && candidate.VerifiedEmails.Any(v => v.Email.Equals(request.Email, StringComparison.OrdinalIgnoreCase));
+            var mergedByCorroboration = !string.IsNullOrEmpty(candidate.MergeReason)
+                && (candidate.MergeReason.StartsWith("Same email", StringComparison.OrdinalIgnoreCase)
+                 || candidate.MergeReason.StartsWith("Same phone", StringComparison.OrdinalIgnoreCase));
+
+            candidate.IsFromUserInput = inputTokens.Contains(primary) || aliasMatch || emailMatch || mergedByCorroboration;
+        }
     }
 
     // ── Scoring ─────────────────────────────────────────────────────────────────
@@ -189,7 +236,11 @@ public class CandidateAggregator
             {
                 _logger.LogWarning("No Claude assessment for candidate {Id} ({Username})",
                     candidate.Id, candidate.PrimaryUsername);
-                ApplySingleFallback(candidate);
+                candidate.ProbabilityScore = 0;
+                candidate.ConfidenceLow = 0;
+                candidate.ConfidenceHigh = 0;
+                candidate.ConsistencyAnalysis = $"Found on {candidate.Sources.Count} platform(s) as '{candidate.PrimaryUsername}'.";
+                candidate.UncertaintyNotes = "Claude returned no assessment for this candidate — see /sessions for raw evidence.";
                 continue;
             }
 
@@ -204,24 +255,21 @@ public class CandidateAggregator
     }
 
     /// <summary>
-    /// Simple rule-based scoring used when Claude API is not available.
+    /// When Claude is unavailable we annotate candidates instead of inventing
+    /// probability numbers. The SearchOrchestrator persists everything to
+    /// /sessions and surfaces a CLI command for the user's local Claude.
     /// </summary>
-    private void ApplyFallbackScoring(List<TargetCandidate> candidates)
+    private void ApplyNoAiAnnotation(List<TargetCandidate> candidates)
     {
         foreach (var candidate in candidates)
-            ApplySingleFallback(candidate);
-    }
-
-    private void ApplySingleFallback(TargetCandidate candidate)
-    {
-        var score = candidate.Sources.Sum(s => s.ContributionScore);
-        var highConf = candidate.Sources.Count(s => s.IsHighConfidence);
-
-        candidate.ProbabilityScore = Math.Min(score + highConf * 10, 75);
-        candidate.ConfidenceLow = Math.Max(0, candidate.ProbabilityScore - 15);
-        candidate.ConfidenceHigh = Math.Min(100, candidate.ProbabilityScore + 15);
-        candidate.ConsistencyAnalysis = $"Found {candidate.Sources.Count} platform(s) with username '{candidate.PrimaryUsername}'.";
-        candidate.UncertaintyNotes = "AI analysis unavailable — scores are estimated.";
+        {
+            candidate.ProbabilityScore = 0;
+            candidate.ConfidenceLow = 0;
+            candidate.ConfidenceHigh = 0;
+            candidate.ConsistencyAnalysis = $"Found on {candidate.Sources.Count} platform(s) as '{candidate.PrimaryUsername}'.";
+            candidate.UncertaintyNotes = "Not scored — Claude API key not configured. " +
+                "Run the `claude` command emitted on search-complete against the /sessions snapshot to rank these locally.";
+        }
     }
 
     // ── Group detection ──────────────────────────────────────────────────────────
