@@ -30,6 +30,13 @@ public class RealSearchService : IRealSearchService
     private readonly WebSearchProvider _webSearchProvider;
     private readonly EmailRepCheck _emailRepCheck;
     private readonly NicknamePermutator _nicknamePermutator;
+    private readonly HackerNewsLookup _hackerNewsLookup;
+    private readonly DevToLookup _devToLookup;
+    private readonly BlueskyLookup _blueskyLookup;
+    private readonly LemmyLookup _lemmyLookup;
+    private readonly MastodonLookup _mastodonLookup;
+    private readonly WykopLookup _wykopLookup;
+    private readonly FourChanArchiveLookup _fourChanArchiveLookup;
     private readonly ILogger<RealSearchService> _logger;
 
     public RealSearchService(
@@ -49,6 +56,13 @@ public class RealSearchService : IRealSearchService
         WebSearchProvider webSearchProvider,
         EmailRepCheck emailRepCheck,
         NicknamePermutator nicknamePermutator,
+        HackerNewsLookup hackerNewsLookup,
+        DevToLookup devToLookup,
+        BlueskyLookup blueskyLookup,
+        LemmyLookup lemmyLookup,
+        MastodonLookup mastodonLookup,
+        WykopLookup wykopLookup,
+        FourChanArchiveLookup fourChanArchiveLookup,
         ILogger<RealSearchService> logger)
     {
         _gravatarLookup = gravatarLookup;
@@ -67,6 +81,13 @@ public class RealSearchService : IRealSearchService
         _webSearchProvider = webSearchProvider;
         _emailRepCheck = emailRepCheck;
         _nicknamePermutator = nicknamePermutator;
+        _hackerNewsLookup = hackerNewsLookup;
+        _devToLookup = devToLookup;
+        _blueskyLookup = blueskyLookup;
+        _lemmyLookup = lemmyLookup;
+        _mastodonLookup = mastodonLookup;
+        _wykopLookup = wykopLookup;
+        _fourChanArchiveLookup = fourChanArchiveLookup;
         _logger = logger;
     }
 
@@ -166,7 +187,28 @@ public class RealSearchService : IRealSearchService
                     if (depth > 1 || string.IsNullOrEmpty(nick) || ct.IsCancellationRequested) return;
                     if (!processedNicks.TryAdd(nick, true) && depth > 0) return;
 
-                    await foreach (var node in _usernameSearch.SearchAsync(nick, ct)) AddResult(node);
+                    var perHandleTasks = new List<Task>
+                    {
+                        Task.Run(async () =>
+                        {
+                            await foreach (var node in _usernameSearch.SearchAsync(nick, ct)) AddResult(node);
+                        }, ct),
+                        _hackerNewsLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) { AddResult(n); foreach (var email in ExtractEmailsFromNode(n)) discoveredEmails.Add(email); } }, ct),
+                        _devToLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) { AddResult(n); foreach (var h in ExtractHandlesFromNode(n)) discoveredHandles.Add(h); foreach (var email in ExtractEmailsFromNode(n)) discoveredEmails.Add(email); } }, ct),
+                        _blueskyLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
+                        _lemmyLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
+                        _mastodonLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
+                        _wykopLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct),
+                        _fourChanArchiveLookup.SearchAsync(nick, ct).ContinueWith(t =>
+                            { if (t.IsCompletedSuccessfully) foreach (var n in t.Result) AddResult(n); }, ct)
+                    };
+                    await Task.WhenAll(perHandleTasks);
                 }
 
                 async Task RunEmailEnrichmentAsync(string email)

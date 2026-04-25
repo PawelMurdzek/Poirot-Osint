@@ -49,6 +49,14 @@ builder.Services.AddSingleton<YouTubeDiscovery>();
 builder.Services.AddSingleton<RedditDiscovery>();
 builder.Services.AddSingleton<StackOverflowDiscovery>();
 builder.Services.AddSingleton<NicknamePermutator>();
+// Phase 7: Tier A — open APIs, no auth, no key required
+builder.Services.AddSingleton<HackerNewsLookup>();
+builder.Services.AddSingleton<DevToLookup>();
+builder.Services.AddSingleton<BlueskyLookup>();
+builder.Services.AddSingleton<LemmyLookup>();
+builder.Services.AddSingleton<MastodonLookup>();
+builder.Services.AddSingleton<WykopLookup>();
+builder.Services.AddSingleton<FourChanArchiveLookup>();
 
 // Register application services
 builder.Services.AddSingleton<ProfileAggregator>();
